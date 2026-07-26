@@ -1,0 +1,8 @@
+1. 
+
+pandas.fwf was written using AI.
+
+2. 
+
+Docker setup was written using AI: Dockerfile, docker-compose.yml, docker/program/entrypoint.sh, docker/postgres/00-schema.sql, docker/postgres/01-roles.sh, docker/postgres/02-embedding.sql.example, medicoder/db/load_icd10.py, .dockerignore, .env.example, models/README.txt, and README run instructions. The psycopg dependency was added via `uv add`. Verified end-to-end locally: Postgres init (schema + read-only agent role), fixed-width ICD-10 -> COPY load (98186 rows, idempotent), program image build + boot, and the agent role's read-only enforcement.
+

@@ -1,0 +1,23 @@
+# VCS / metadata
+.git
+.gitignore
+
+# Local virtualenv (deps are reinstalled in the image from uv.lock)
+.venv
+
+# Local model files (bind-mounted, not baked into the image)
+models/
+
+# Secrets
+.env
+
+# Python caches
+__pycache__/
+*.py[oc]
+*.egg-info/
+
+# Docs / PDFs not needed at runtime
+*.pdf
+
+# Docker artifacts (the Dockerfile/compose themselves are copied explicitly)
+docker-compose.yml

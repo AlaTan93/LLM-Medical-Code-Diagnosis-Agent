@@ -13,3 +13,11 @@ wheels/
 icd10_cm_cases.json
 icd10cm_order_2026.txt
 MLE (LLM) - Take Home Assignment.pdf
+
+# Data files
+data
+
+# Docker secrets + local model weights
+.env
+models/*.gguf
+models/*.bin

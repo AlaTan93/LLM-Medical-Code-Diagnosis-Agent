@@ -1,0 +1,37 @@
+Notes:
+
+There are 98186 case codes. It is possible that in the future, non-billable codes may become billable, or vice-versa, so keeping all records is important. 
+However, only billable rows should be used for the purpose of text embedding.
+
+
+Option 1:
+Agentic
+
+Agent is given access to either generate output or a SELECT-only SQL tool that allows the agent to search.
+Agent is fed medical note, and told to use the tool to search the database and find the result.
+Agent determines diagnosis
+[Potential for debate-critic loop here]
+
+Pros:
+Agentic is the new hype thing?
+Agent can match result to long description
+No need to use vector embedding model
+Shows agentic knowledge
+
+Cons:
+Takes more tokens, maybe
+Need to secure PostgreSQL user agent and scope it to only read-only queries.
+Potential for runaway autonomy
+
+Option 2:
+Vector Similarity search
+
+AI model told to give a one sentence diagnosis.
+Embed diagnosis.
+Vector similar search.
+Pick top result.
+Debate-critic loop on whether the long description fits the case.
+
+Pros:
+Lower security issues
+Semi-familiar with vector similarity

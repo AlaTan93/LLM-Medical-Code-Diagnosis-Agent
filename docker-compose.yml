@@ -1,0 +1,127 @@
+# medicoder-technical
+#
+# Default (2 containers)  : docker compose up                      # program + postgres; LLM is external
+# AMD GPU  (3 containers) : docker compose --profile amd up        # adds local llama.cpp (ROCm) for the 7900 XTX
+# NVIDIA    (3 containers): docker compose --profile nvidia up     # adds local llama.cpp (CUDA) fallback
+#
+# The AMD and NVIDIA llama.cpp services share the network alias "llamacpp", so
+# the program's LLM_BASE_URL (http://llamacpp:8080/v1) works regardless of which
+# vendor profile is active.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-medicoder}
+      # Handed to the init scripts in docker/postgres.
+      MEDICODER_PASSWORD: ${MEDICODER_PASSWORD:?set MEDICODER_PASSWORD in .env}
+      AGENT_PASSWORD: ${AGENT_PASSWORD:?set AGENT_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-medicoder}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  medicoder:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # The loader connects as the read/write medicoder role.
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: ${POSTGRES_DB:-medicoder}
+      PGUSER: medicoder
+      PGPASSWORD: ${MEDICODER_PASSWORD:?set MEDICODER_PASSWORD in .env}
+      ICD10_FILE: /app/icd10cm_order_2026.txt
+      # Program points its OpenAI-compatible client here.
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://llamacpp:8080/v1}
+      LLM_MODEL: ${LLM_MODEL_FILE:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ---- Local LLM: AMD Radeon (ROCm / HIP) -----------------------------------
+  # Primary target. RX 7900 XTX = gfx1100 (officially supported by ROCm).
+  llamacpp-amd:
+    image: ghcr.io/ggml-org/llama.cpp:server-rocm
+    profiles: ["amd"]
+    networks:
+      default:
+        aliases: ["llamacpp"]
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - render
+      - video
+    security_opt:
+      - seccomp:unconfined
+    cap_add:
+      - SYS_PTRACE
+    ipc: host
+    environment:
+      HSA_OVERRIDE_GFX_VERSION: ${HSA_OVERRIDE_GFX_VERSION:-gfx1100}
+      HIP_VISIBLE_DEVICES: "0"
+    volumes:
+      - ./models:/models:ro
+    ports:
+      - "8080:8080"
+    # ${...:-model.gguf} default keeps the file parseable even when the GPU
+    # profile is inactive (2-container mode). The container only starts under
+    # the profile, so a wrong default is harmless until you set LLM_MODEL_FILE.
+    command:
+      - "-m"
+      - "/models/${LLM_MODEL_FILE:-model.gguf}"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8080"
+      - "-ngl"
+      - "-1"
+      - "-c"
+      - "${LLM_CONTEXT_SIZE:-8192}"
+    restart: unless-stopped
+
+  # ---- Local LLM: NVIDIA (CUDA) fallback ------------------------------------
+  llamacpp-nvidia:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    profiles: ["nvidia"]
+    networks:
+      default:
+        aliases: ["llamacpp"]
+    volumes:
+      - ./models:/models:ro
+    ports:
+      - "8080:8080"
+    command:
+      - "-m"
+      - "/models/${LLM_MODEL_FILE:-model.gguf}"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8080"
+      - "-ngl"
+      - "-1"
+      - "-c"
+      - "${LLM_CONTEXT_SIZE:-8192}"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: ["gpu"]
+    restart: unless-stopped
+
+volumes:
+  pgdata:

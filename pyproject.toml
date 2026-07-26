@@ -6,5 +6,6 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "pandas>=3.0.5",
+    "psycopg[binary]>=3.2",
     "pydantic>=2.13.4",
 ]

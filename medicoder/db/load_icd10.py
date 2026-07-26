@@ -1,0 +1,120 @@
+"""Idempotent loader for the ICD-10-CM order file into PostgreSQL.
+
+The source file ``icd10cm_order_YYYY.txt`` is a fixed-width ASCII file. Column
+offsets are documented in CMS' file layout and were verified against the 2026
+release:
+
+    (0, 5)   order number
+    (6, 13)  ICD-10-CM code (7 chars, left-justified, space-padded)
+    (14, 15) description type (0 = category header, 1 = billable code)
+    (16, 76) short description (60 chars)
+    (77, ..) long description (variable width)
+
+Connection parameters come from the standard libpq environment variables
+(``PGHOST``, ``PGPORT``, ``PGDATABASE``, ``PGUSER``, ``PGPASSWORD``). The loader
+connects as the read/write ``medicoder`` role and uses the binary COPY protocol
+for speed. It is safe to re-run: if the table already holds rows it exits early
+unless ``LOAD_FORCE=1``.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+import time
+from pathlib import Path
+
+import pandas as pd
+import psycopg
+
+COLSPECS = [(0, 5), (6, 13), (14, 15), (16, 76), (77, None)]
+COLUMNS = ["order_number", "code", "code_type", "short_desc", "long_desc"]
+
+COUNT_SQL = "SELECT count(*) FROM icd10_codes"
+TRUNCATE_SQL = "TRUNCATE TABLE icd10_codes"
+COPY_SQL = (
+    "COPY icd10_codes (order_number, code, code_type, short_desc, long_desc) "
+    "FROM STDIN"
+)
+
+
+def _connect() -> psycopg.Connection:
+    kwargs = {
+        "host": os.environ.get("PGHOST", "postgres"),
+        "port": int(os.environ.get("PGPORT", "5432")),
+        "dbname": os.environ.get("PGDATABASE", "medicoder"),
+        "user": os.environ.get("PGUSER", "medicoder"),
+        "password": os.environ.get("PGPASSWORD", ""),
+    }
+    retries = int(os.environ.get("PG_CONNECT_RETRIES", "30"))
+    last_err: Exception | None = None
+    for _ in range(retries):
+        try:
+            return psycopg.connect(connect_timeout=5, **kwargs)
+        except psycopg.OperationalError as exc:
+            last_err = exc
+            print(f"[load_icd10] waiting for postgres: {exc}", file=sys.stderr)
+            time.sleep(2)
+    raise RuntimeError(f"could not connect to postgres: {last_err}")
+
+
+def _read_frame(path: Path) -> pd.DataFrame:
+    df = pd.read_fwf(
+        path,
+        colspecs=COLSPECS,
+        names=COLUMNS,
+        dtype={"order_number": "int64", "code": "string", "code_type": "int8"},
+    )
+    df = df.dropna(subset=["order_number", "code"])
+    for col in ("code", "short_desc", "long_desc"):
+        df[col] = df[col].astype("string").str.strip()
+    df["code_type"] = df["code_type"].astype("int8")
+    return df[["order_number", "code", "code_type", "short_desc", "long_desc"]]
+
+
+def load(path: Path, *, force: bool = False) -> int:
+    print(f"[load_icd10] parsing {path} ...")
+    df = _read_frame(path)
+    print(f"[load_icd10] parsed {len(df)} rows")
+
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute(COUNT_SQL)
+        existing = cur.fetchone()[0]
+        if existing and not force:
+            print(f"[load_icd10] icd10_codes already has {existing} rows; skipping.")
+            return 0
+        if existing and force:
+            print(f"[load_icd10] force=True; truncating {existing} rows.")
+            cur.execute(TRUNCATE_SQL)
+
+        with cur.copy(COPY_SQL) as copy:
+            for row in df.itertuples(index=False):
+                copy.write_row(
+                    (
+                        int(row.order_number),
+                        row.code,
+                        int(row.code_type),
+                        row.short_desc,
+                        row.long_desc,
+                    )
+                )
+        conn.commit()
+
+        cur.execute(COUNT_SQL)
+        total = cur.fetchone()[0]
+        print(f"[load_icd10] loaded {total} rows into icd10_codes.")
+        return total
+
+
+def main() -> int:
+    path = Path(os.environ.get("ICD10_FILE", "icd10cm_order_2026.txt"))
+    force = os.environ.get("LOAD_FORCE", "").lower() in ("1", "true", "yes")
+    if not path.exists():
+        print(f"[load_icd10] data file not found: {path}", file=sys.stderr)
+        return 1
+    load(path, force=force)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
