@@ -1,0 +1,15 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Technical Assessment Files
+icd10_cm_cases.json
+icd10cm_order_2026.txt
+MLE (LLM) - Take Home Assignment.pdf
