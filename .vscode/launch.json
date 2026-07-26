@@ -1,0 +1,29 @@
+{
+  // Debugging the medicoder app running in the Docker container.
+  //
+  // Prereqs: install the "Python Debugger" (ms-python.debugpy) extension and
+  // have a `.env` file with the Postgres passwords (copy .env.example).
+  //
+  // Press F5: the "debug-up" task starts the medicoder container under debugpy
+  // (waiting for attach), then this config attaches to it.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Python: Attach to medicoder container",
+      "type": "debugpy",
+      "request": "attach",
+      "preLaunchTask": "debug-up",
+      "connect": {
+        "host": "127.0.0.1",
+        "port": 5678
+      },
+      "pathMappings": [
+        {
+          "localRoot": "${workspaceFolder}",
+          "remoteRoot": "/app"
+        }
+      ],
+      "justMyCode": true
+    }
+  ]
+}

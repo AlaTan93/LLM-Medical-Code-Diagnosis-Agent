@@ -1,0 +1,36 @@
+# LiteLLM proxy configuration.
+#
+# - Routes the model names your app calls ("A", "B", "C", ...) to local Ollama
+#   tags. Add one block per model you want to rotate, then:
+#     docker compose --profile amd exec ollama ollama pull <tag>
+#     docker compose --profile amd up -d litellm-amd
+# - Writes a full audit (request messages + response, tokens, cost, latency) to
+#   Postgres (LiteLLM_SpendLogs table) via DATABASE_URL. Message logging is ON
+#   by default; do NOT set turn_off_message_logging if you want the payloads.
+
+model_list:
+  # Example: the app calls model "A"; LiteLLM forwards to the Ollama tag
+  # "llama3.2" at the ollama service (alias resolves to the active vendor).
+  - model_name: A
+    litellm_params:
+      model: ollama/llama3.2
+      api_base: http://ollama:11434
+
+  # - model_name: B
+  #   litellm_params:
+  #     model: ollama/qwen2.5:7b
+  #     api_base: http://ollama:11434
+
+  # - model_name: C
+  #   litellm_params:
+  #     model: ollama/mymodel            # e.g. a GGUF imported via `ollama create`
+  #     api_base: http://ollama:11434
+
+litellm_settings:
+  drop_params: true
+
+general_settings:
+  # Postgres-backed audit store (DATABASE_URL is set on the litellm container).
+  database_url: os.environ/DATABASE_URL
+  # Uncomment to require auth; the app must then send Authorization: Bearer ...
+  # master_key: os.environ/LITELLM_MASTER_KEY

@@ -9,3 +9,11 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "pydantic>=2.13.4",
 ]
+
+# Debug-only tools. Excluded from the production image (Dockerfile uses
+# `uv sync --no-dev`); installed into the container only by the debug compose
+# override (docker/docker-compose.debug.yml).
+[dependency-groups]
+dev = [
+    "debugpy>=1.8",
+]

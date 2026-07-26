@@ -1,16 +1,17 @@
 # medicoder-technical
 
-ICD-10-CM medical coding prototype. The stack runs as 2 or 3 containers:
+ICD-10-CM medical coding prototype. The stack runs as 2 or 4 containers:
 
 | Service       | Image                              | Role                                                        |
 | ------------- | ---------------------------------- | ---------------------------------------------------------- |
-| `postgres`    | `pgvector/pgvector:pg16`           | Stores `icd10_codes`; `medicoder` (rw) + `agent` (ro) roles |
+| `postgres`    | `pgvector/pgvector:pg16`           | Stores `icd10_codes`; `medicoder` (rw) + `agent` (ro) roles; LiteLLM audit DB |
 | `medicoder`   | built from `Dockerfile`            | App + idempotent ICD-10 loader                              |
-| `llamacpp-*`  | `ghcr.io/ggml-org/llama.cpp:...`   | Local LLM (OpenAI-compatible API). Optional, profile-gated  |
+| `ollama-*`    | `ollama/ollama:rocm` / `ollama/ollama` | Local LLM inference (auto VRAM-managed). Optional, profile-gated |
+| `litellm-*`   | `ghcr.io/berriai/litellm:main-stable` | Model-alias router + Postgres call/response audit log. Optional, profile-gated |
 
 `medicoder` always points its OpenAI-compatible client at `LLM_BASE_URL`. With a
-profile active that is `http://llamacpp:8080/v1`; without one, set it to an
-external endpoint (LiteLLM / OpenAI / an existing llama.cpp host).
+profile active that is `http://litellm:4000/v1` (LiteLLM routes to Ollama);
+without one, set it to an external endpoint (OpenAI / an existing host).
 
 ## Prerequisites
 
@@ -23,8 +24,9 @@ external endpoint (LiteLLM / OpenAI / an existing llama.cpp host).
 ## Setup
 
 1. Copy `.env.example` to `.env` and set the passwords.
-2. Drop a GGUF model into `./models/` and set `LLM_MODEL_FILE` (e.g.
-   `qwen2.5-7b-instruct-q4_k_m.gguf`). Leave empty for the external-LLM mode.
+2. For local LLM runs, edit `docker/litellm/config.yaml` to map model aliases
+   (A, B, C ...) to Ollama tags, then pull the tags (see *Model management*
+   below). Skip for external-LLM mode.
 
 ## Run
 
@@ -32,11 +34,33 @@ external endpoint (LiteLLM / OpenAI / an existing llama.cpp host).
 # 2 containers: program + postgres, LLM is external (LLM_BASE_URL in .env)
 docker compose up --build
 
-# 3 containers, AMD Radeon (RX 7900 XTX) local inference
+# 4 containers, AMD Radeon (RX 7900 XTX) local inference
 docker compose --profile amd up --build
 
-# 3 containers, NVIDIA fallback
+# 4 containers, NVIDIA fallback
 docker compose --profile nvidia up --build
+```
+
+## Model management (Ollama + LiteLLM)
+
+Ollama auto-manages VRAM: `OLLAMA_MAX_LOADED_MODELS=1` keeps a single model
+resident; `OLLAMA_KEEP_ALIVE=5m` unloads it 5 min after the last request.
+
+LiteLLM sits between the app and Ollama. The app calls a model alias (e.g.
+`A`); `docker/litellm/config.yaml` maps that alias to an Ollama tag.
+
+**Pull a model once** (stored in the `ollama-models` volume):
+
+```bash
+docker compose --profile amd exec ollama ollama pull llama3.2
+```
+
+**Audit log:** every LLM call and its response are written to the `LiteLLM_SpendLogs`
+table in the `litellm` database. Query it:
+
+```bash
+docker compose exec postgres psql -U postgres -d litellm \
+  -c "SELECT request_id, model, prompt_tokens, completion_tokens, startTime, endTime FROM \"LiteLLM_SpendLogs\" ORDER BY startTime DESC LIMIT 10;"
 ```
 
 ## What the loader does
@@ -67,16 +91,58 @@ psql -h localhost -U medicoder -d medicoder \
      -f docker/postgres/02-embedding.sql.example
 ```
 
+## Debugging (VSCode, in-container)
+
+Debug the `medicoder` app while it runs in the container. The source is
+bind-mounted, so host edits are picked up with **no rebuild**.
+
+**One-time:** install the **Python Debugger** extension (`ms-python.debugpy`;
+VSCode offers this via `.vscode/extensions.json`). The Python extension
+(`ms-python.python`) is also recommended.
+
+**Debug:**
+
+1. Copy `.env.example` to `.env` (the debug task reads it).
+2. Set a breakpoint in `main.py` or anywhere under `medicoder/`.
+3. Run & Debug -> **Python: Attach to medicoder container** (F5).
+
+F5 runs the `debug-up` task, which starts the `medicoder` + `postgres` stack
+under `docker/docker-compose.debug.yml` (the app is launched under `debugpy`
+with `--wait-for-client`, so it pauses until VSCode attaches), waits for the
+debug port, then attaches. Stop with the **debug-down** task.
+
+Equivalent shell commands:
+
+```bash
+docker compose --env-file .env -f docker-compose.yml \
+               -f docker/docker-compose.debug.yml up medicoder   # then F5
+docker compose --env-file .env -f docker-compose.yml \
+               -f docker/docker-compose.debug.yml down           # stop
+```
+
+Notes:
+- Breakpoints in `medicoder/db/load_icd10.py` won't hit — the loader runs
+  before `debugpy` attaches. To debug it, change the `command` in
+  `docker/docker-compose.debug.yml` to run debugpy against the module:
+  `python -m debugpy ... -m medicoder.db.load_icd10`.
+- Dependency changes still need `uv sync` (the debug command runs it) or a
+  rebuild: `docker compose build medicoder`.
+- Debug runs as the non-root `app` user, matching production.
+
 ## Layout
 
 ```
 Dockerfile                     program image
-docker-compose.yml             3/2 service orchestration
+docker-compose.yml             4/2 service orchestration
+docker/docker-compose.debug.yml  VSCode debugpy attach override
 docker/program/entrypoint.sh   runs loader, then the app command
 docker/postgres/00-schema.sql  extension + icd10_codes table + indexes
 docker/postgres/01-roles.sh    medicoder (rw) + agent (ro) roles
+docker/postgres/02-litellm.sh  litellm role + audit database
 docker/postgres/02-embedding.sql.example  optional pgvector column/index
+docker/litellm/config.yaml     LiteLLM model-alias routing + DB logging
 medicoder/db/load_icd10.py     fixed-width -> COPY loader
+.vscode/{launch,tasks,extensions}.json  VSCode container debugging
 .env.example                   all configuration
-models/                        bind-mounted GGUF models (gitignored)
+models/                        bind-mounted model files (gitignored)
 ```

@@ -1,0 +1,9 @@
+{
+  // Extensions recommended for this workspace. VSCode prompts to install these
+  // (you can also install them manually from the Extensions panel).
+  "recommendations": [
+    "ms-python.debugpy",
+    "ms-python.python",
+    "ms-azuretools.vscode-docker"
+  ]
+}

@@ -1,12 +1,12 @@
 # medicoder-technical
 #
-# Default (2 containers)  : docker compose up                      # program + postgres; LLM is external
-# AMD GPU  (3 containers) : docker compose --profile amd up        # adds local llama.cpp (ROCm) for the 7900 XTX
-# NVIDIA    (3 containers): docker compose --profile nvidia up     # adds local llama.cpp (CUDA) fallback
+# Default (2 containers) : docker compose up                         # program + postgres; LLM is external
+# AMD GPU  (4 containers): docker compose --profile amd up          # adds ollama + litellm (ROCm)
+# NVIDIA   (4 containers): docker compose --profile nvidia up       # adds ollama + litellm (CUDA)
 #
-# The AMD and NVIDIA llama.cpp services share the network alias "llamacpp", so
-# the program's LLM_BASE_URL (http://llamacpp:8080/v1) works regardless of which
-# vendor profile is active.
+# The AMD and NVIDIA ollama/litellm services share network aliases ("ollama",
+# "litellm"), so the program's LLM_BASE_URL (http://litellm:4000/v1) and the
+# litellm->ollama link (http://ollama:11434) work regardless of vendor profile.
 
 services:
   postgres:
@@ -18,6 +18,7 @@ services:
       # Handed to the init scripts in docker/postgres.
       MEDICODER_PASSWORD: ${MEDICODER_PASSWORD:?set MEDICODER_PASSWORD in .env}
       AGENT_PASSWORD: ${AGENT_PASSWORD:?set AGENT_PASSWORD in .env}
+      LITELLM_DB_PASSWORD: ${LITELLM_DB_PASSWORD:?set LITELLM_DB_PASSWORD in .env}
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./docker/postgres:/docker-entrypoint-initdb.d:ro
@@ -42,22 +43,25 @@ services:
       PGUSER: medicoder
       PGPASSWORD: ${MEDICODER_PASSWORD:?set MEDICODER_PASSWORD in .env}
       ICD10_FILE: /app/icd10cm_order_2026.txt
-      # Program points its OpenAI-compatible client here.
-      LLM_BASE_URL: ${LLM_BASE_URL:-http://llamacpp:8080/v1}
-      LLM_MODEL: ${LLM_MODEL_FILE:-}
+      # Program points its OpenAI-compatible client at LiteLLM (or an external endpoint).
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://litellm:4000/v1}
+      # Model alias defined in docker/litellm/config.yaml (e.g. "A").
+      LLM_MODEL: ${LLM_MODEL:-A}
     depends_on:
       postgres:
         condition: service_healthy
     restart: unless-stopped
 
-  # ---- Local LLM: AMD Radeon (ROCm / HIP) -----------------------------------
+  # ---- Ollama: AMD Radeon (ROCm / HIP) --------------------------------------
   # Primary target. RX 7900 XTX = gfx1100 (officially supported by ROCm).
-  llamacpp-amd:
-    image: ghcr.io/ggml-org/llama.cpp:server-rocm
+  # OLLAMA_MAX_LOADED_MODELS=1 + OLLAMA_KEEP_ALIVE keep VRAM bounded: only one
+  # model resident at a time, auto-unloaded after the idle window expires.
+  ollama-amd:
+    image: ollama/ollama:rocm
     profiles: ["amd"]
     networks:
       default:
-        aliases: ["llamacpp"]
+        aliases: ["ollama"]
     devices:
       - /dev/kfd:/dev/kfd
       - /dev/dri:/dev/dri
@@ -70,50 +74,33 @@ services:
       - SYS_PTRACE
     ipc: host
     environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_MAX_LOADED_MODELS: ${OLLAMA_MAX_LOADED_MODELS:-1}
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-5m}
       HSA_OVERRIDE_GFX_VERSION: ${HSA_OVERRIDE_GFX_VERSION:-gfx1100}
-      HIP_VISIBLE_DEVICES: "0"
     volumes:
+      - ollama-models:/root/.ollama
       - ./models:/models:ro
     ports:
-      - "8080:8080"
-    # ${...:-model.gguf} default keeps the file parseable even when the GPU
-    # profile is inactive (2-container mode). The container only starts under
-    # the profile, so a wrong default is harmless until you set LLM_MODEL_FILE.
-    command:
-      - "-m"
-      - "/models/${LLM_MODEL_FILE:-model.gguf}"
-      - "--host"
-      - "0.0.0.0"
-      - "--port"
-      - "8080"
-      - "-ngl"
-      - "-1"
-      - "-c"
-      - "${LLM_CONTEXT_SIZE:-8192}"
+      - "11434:11434"
     restart: unless-stopped
 
-  # ---- Local LLM: NVIDIA (CUDA) fallback ------------------------------------
-  llamacpp-nvidia:
-    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+  # ---- Ollama: NVIDIA (CUDA) fallback ---------------------------------------
+  ollama-nvidia:
+    image: ollama/ollama
     profiles: ["nvidia"]
     networks:
       default:
-        aliases: ["llamacpp"]
+        aliases: ["ollama"]
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_MAX_LOADED_MODELS: ${OLLAMA_MAX_LOADED_MODELS:-1}
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-5m}
     volumes:
+      - ollama-models:/root/.ollama
       - ./models:/models:ro
     ports:
-      - "8080:8080"
-    command:
-      - "-m"
-      - "/models/${LLM_MODEL_FILE:-model.gguf}"
-      - "--host"
-      - "0.0.0.0"
-      - "--port"
-      - "8080"
-      - "-ngl"
-      - "-1"
-      - "-c"
-      - "${LLM_CONTEXT_SIZE:-8192}"
+      - "11434:11434"
     deploy:
       resources:
         reservations:
@@ -123,5 +110,77 @@ services:
               capabilities: ["gpu"]
     restart: unless-stopped
 
+  # ---- LiteLLM proxy: AMD ---------------------------------------------------
+  # Routes model aliases (A/B/C ...) to Ollama tags and audits every call +
+  # response to Postgres (LiteLLM_SpendLogs via DATABASE_URL + Prisma migration).
+  litellm-amd:
+    image: ghcr.io/berriai/litellm:main-stable
+    profiles: ["amd"]
+    networks:
+      default:
+        aliases: ["litellm"]
+    volumes:
+      - ./docker/litellm/config.yaml:/app/config.yaml:ro
+    environment:
+      DATABASE_URL: postgresql://litellm:${LITELLM_DB_PASSWORD:?set LITELLM_DB_PASSWORD in .env}@postgres:5432/litellm
+      # Uncomment the next line + the master_key line in config.yaml to require auth.
+      # LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
+    command:
+      - "--config"
+      - "/app/config.yaml"
+      - "--port"
+      - "4000"
+      - "--host"
+      - "0.0.0.0"
+    ports:
+      - "4000:4000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:4000/health/liveliness || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama-amd:
+        condition: service_started
+    restart: unless-stopped
+
+  # ---- LiteLLM proxy: NVIDIA ------------------------------------------------
+  litellm-nvidia:
+    image: ghcr.io/berriai/litellm:main-stable
+    profiles: ["nvidia"]
+    networks:
+      default:
+        aliases: ["litellm"]
+    volumes:
+      - ./docker/litellm/config.yaml:/app/config.yaml:ro
+    environment:
+      DATABASE_URL: postgresql://litellm:${LITELLM_DB_PASSWORD:?set LITELLM_DB_PASSWORD in .env}@postgres:5432/litellm
+      # LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
+    command:
+      - "--config"
+      - "/app/config.yaml"
+      - "--port"
+      - "4000"
+      - "--host"
+      - "0.0.0.0"
+    ports:
+      - "4000:4000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:4000/health/liveliness || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama-nvidia:
+        condition: service_started
+    restart: unless-stopped
+
 volumes:
   pgdata:
+  ollama-models:

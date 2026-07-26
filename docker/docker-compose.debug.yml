@@ -1,0 +1,47 @@
+# Debug override for the medicoder service.
+#
+# Start the app under debugpy (waiting for VSCode to attach), with the source
+# bind-mounted for live edits (no rebuild needed for code changes).
+#
+#   docker compose --env-file .env \
+#       -f docker-compose.yml -f docker/docker-compose.debug.yml up medicoder
+#
+# In VSCode: set a breakpoint and press F5 (the "debug-up" task starts this
+# stack and waits for the debug port, then the launch config attaches).
+#
+# Notes:
+# - This uses SELECTIVE mounts (./medicoder, ./main.py, ./data) so the baked
+#   container venv at /app/.venv (Python 3.13) is NOT shadowed by the host's
+#   Python 3.14 .venv. Mounting ./:/app wholesale would break imports.
+# - The baked ENTRYPOINT (/entrypoint.sh) still runs: it loads ICD-10 data
+#   first, then `exec`s this command. So breakpoints in the *loader* won't be
+#   hit (it runs before debugpy attaches); see README to debug the loader.
+# - Runs as the non-root `app` user, matching production.
+
+services:
+  medicoder:
+    ports:
+      - "5678:5678"
+    restart: "no"
+    volumes:
+      # Live source (host edits reflect immediately in the container).
+      - ./medicoder:/app/medicoder
+      - ./main.py:/app/main.py
+      # Read-only data; the real host layout has data/ (COPY flattens it, mounts don't).
+      - ./data:/app/data:ro
+      # Live lockfile so `uv sync` picks up dependency changes without a rebuild.
+      - ./pyproject.toml:/app/pyproject.toml:ro
+      - ./uv.lock:/app/uv.lock:ro
+    environment:
+      ICD10_FILE: /app/data/icd10cm_order_2026.txt
+      # Silence debugpy's file-validation note (expected with path mappings).
+      PYDEVD_DISABLE_FILE_VALIDATION: "1"
+    # `uv sync` (without --no-dev) adds debugpy to the baked container venv,
+    # then debugpy listens and waits for VSCode to attach before running main.py.
+    # -Xfrozen_modules=off avoids missed breakpoints (image compiles bytecode).
+    command:
+      - sh
+      - -c
+      - |
+        uv sync --frozen --no-install-project
+        python -Xfrozen_modules=off -m debugpy --listen 0.0.0.0:5678 --wait-for-client main.py

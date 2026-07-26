@@ -3,6 +3,7 @@ Notes:
 There are 98186 case codes. It is possible that in the future, non-billable codes may become billable, or vice-versa, so keeping all records is important. 
 However, only billable rows should be used for the purpose of text embedding.
 
+Goal is to complete project and testing by Thursday.
 
 Option 1:
 Agentic
@@ -35,3 +36,16 @@ Debate-critic loop on whether the long description fits the case.
 Pros:
 Lower security issues
 Semi-familiar with vector similarity
+Could use a vector similarity search agent as a voter or a way to double-check the output (ambiguity means need to debate-critic?)
+
+Cons:
+May be seen as less technically complex
+May not be useful if the embedding model is bad
+
+
+Basic Goals:
+Agentic search + Vector search
+
+Stretch Goals:
+Multiple model voting
+Ask later if Terraform AWS deployment is allowed. (Data may be synthetically generated based off https://www.codeicd.org/guides/case-study-library/, but if it's real anonymised data, should not deploy system that is to tested on it on the cloud)

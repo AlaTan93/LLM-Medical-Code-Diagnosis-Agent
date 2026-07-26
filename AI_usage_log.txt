@@ -6,3 +6,12 @@ pandas.fwf was written using AI.
 
 Docker setup was written using AI: Dockerfile, docker-compose.yml, docker/program/entrypoint.sh, docker/postgres/00-schema.sql, docker/postgres/01-roles.sh, docker/postgres/02-embedding.sql.example, medicoder/db/load_icd10.py, .dockerignore, .env.example, models/README.txt, and README run instructions. The psycopg dependency was added via `uv add`. Verified end-to-end locally: Postgres init (schema + read-only agent role), fixed-width ICD-10 -> COPY load (98186 rows, idempotent), program image build + boot, and the agent role's read-only enforcement.
 
+3. 
+
+VSCode container-debugging setup was written using AI: docker/docker-compose.debug.yml (debugpy attach override with live source mounts), .vscode/launch.json, .vscode/tasks.json, .vscode/extensions.json, the pyproject.toml `[dependency-groups] dev = ["debugpy"]` (lock regenerated), and the README Debugging section. Verified the debug stack starts and debugpy opens port 5678. Fixed debug-attach race: tasks.json endsPattern was "." (matched first compose line -> ECONNREFUSED on first F5); changed to a background task printing DEBUGPY_READY only after port 5678 opens. Single-F5 attach confirmed with breakpoint hit.
+
+4. 
+
+Ollama + LiteLLM integration (replacing llama.cpp) was written using AI: docker-compose.yml rewrite (removed llamacpp-amd/nvidia, added ollama-amd/nvidia with OLLAMA_MAX_LOADED_MODELS=1 + OLLAMA_KEEP_ALIVE for bounded VRAM, added litellm-amd/nvidia with Postgres DATABASE_URL for call/response auditing), docker/postgres/02-litellm.sh (litellm role + database via conditional \gexec), docker/litellm/config.yaml (model-alias routing A/B/C -> Ollama tags, drop_params, database_url for LiteLLM_SpendLogs), .env.example (LITELLM_DB_PASSWORD, OLLAMA_* vars, LLM_MODEL alias), README update. Vendor profile pattern uses shared network aliases (ollama, litellm). Compose config validated for default/amd/nvidia modes.
+
+

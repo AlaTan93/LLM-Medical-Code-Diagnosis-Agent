@@ -1,0 +1,32 @@
+{
+  // Tasks that manage the debug compose stack.
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "debug-up",
+      "detail": "Start medicoder under debugpy (waits for attach) + postgres",
+      "type": "shell",
+      // Start the stack, then poll the debug port. Once it's open, print
+      // DEBUGPY_READY (the problemMatcher.background.endsPattern VSCode waits
+      // for before attaching) and stay alive until the debug session ends.
+      "command": "docker compose --env-file .env -f docker-compose.yml -f docker/docker-compose.debug.yml up -d medicoder && bash -c 'for i in $(seq 1 90); do (echo > /dev/tcp/127.0.0.1/5678) 2>/dev/null && { echo DEBUGPY_READY; sleep 86400; exit 0; }; sleep 1; done; echo DEBUGPY_TIMEOUT; exit 1'",
+      "isBackground": true,
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": {
+        "owner": "docker-debug",
+        "pattern": { "regexp": "^DEBUGPY_TIMEOUT$" },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".",
+          "endsPattern": "DEBUGPY_READY"
+        }
+      }
+    },
+    {
+      "label": "debug-down",
+      "detail": "Stop and remove the debug compose stack",
+      "type": "shell",
+      "command": "docker compose --env-file .env -f docker-compose.yml -f docker/docker-compose.debug.yml down"
+    }
+  ]
+}
