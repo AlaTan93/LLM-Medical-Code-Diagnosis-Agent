@@ -44,4 +44,16 @@ services:
       - -c
       - |
         uv sync --frozen --no-install-project
+        # Report readiness WITHOUT connecting to :5678 — any TCP connect to
+        # this port is accepted by debugpy (--wait-for-client) as its first
+        # client and races the VSCode attach. Watch /proc/net/tcp instead:
+        # 5678 == 0x1634, LISTEN state == 0A.
+        (
+          for i in $(seq 1 120); do
+            awk '$2 ~ /:1634$/ && $4 == "0A" { ok=1 } END { exit !ok }' /proc/net/tcp \
+              && { echo DEBUGPY_READY; exit 0; }
+            sleep 0.5
+          done
+          echo DEBUGPY_TIMEOUT
+        ) &
         python -Xfrozen_modules=off -m debugpy --listen 0.0.0.0:5678 --wait-for-client main.py

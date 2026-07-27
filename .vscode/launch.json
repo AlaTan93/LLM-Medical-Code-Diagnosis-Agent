@@ -13,6 +13,7 @@
       "type": "debugpy",
       "request": "attach",
       "preLaunchTask": "debug-up",
+      "postDebugTask": "debug-down",
       "connect": {
         "host": "127.0.0.1",
         "port": 5678

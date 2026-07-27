@@ -11,7 +11,7 @@ def main():
     names = ["order", "code", "type", "short_desc", "long_desc"]
 
     df = pd.read_fwf(
-        "icd10cm_order_2026.txt",
+        "data/icd10cm_order_2026.txt",
         colspecs=colspecs,
         names=names,
         dtype={"order": "int64", "code": "string", "type": "int8"},

@@ -4,23 +4,16 @@
   "tasks": [
     {
       "label": "debug-up",
-      "detail": "Start medicoder under debugpy (waits for attach) + postgres",
+      "detail": "Start medicoder under debugpy (detached) + postgres, wait for its ready marker",
       "type": "shell",
-      // Start the stack, then poll the debug port. Once it's open, print
-      // DEBUGPY_READY (the problemMatcher.background.endsPattern VSCode waits
-      // for before attaching) and stay alive until the debug session ends.
-      "command": "docker compose --env-file .env -f docker-compose.yml -f docker/docker-compose.debug.yml up -d medicoder && bash -c 'for i in $(seq 1 90); do (echo > /dev/tcp/127.0.0.1/5678) 2>/dev/null && { echo DEBUGPY_READY; sleep 86400; exit 0; }; sleep 1; done; echo DEBUGPY_TIMEOUT; exit 1'",
-      "isBackground": true,
-      "presentation": { "reveal": "always", "panel": "dedicated" },
-      "problemMatcher": {
-        "owner": "docker-debug",
-        "pattern": { "regexp": "^DEBUGPY_TIMEOUT$" },
-        "background": {
-          "activeOnStart": true,
-          "beginsPattern": ".",
-          "endsPattern": "DEBUGPY_READY"
-        }
-      }
+      // Start the detached stack, then poll the container logs for the
+      // DEBUGPY_READY marker emitted by the compose command. We deliberately do
+      // NOT probe :5678: connecting to that port is accepted by debugpy
+      // (--wait-for-client) as its first client and races the VSCode attach.
+      // Plain (non-background) preLaunchTask: VSCode waits for this task to exit
+      // (0) before attaching. On timeout it exits 1 (clear failure).
+      "command": "docker compose --env-file .env -f docker-compose.yml -f docker/docker-compose.debug.yml up -d medicoder && bash -c 'for i in $(seq 1 120); do docker logs medicoder_technical-medicoder-1 2>&1 | grep -q DEBUGPY_READY && { echo DEBUGPY_READY; exit 0; }; sleep 1; done; echo DEBUGPY_TIMEOUT; exit 1'",
+      "presentation": { "reveal": "always", "panel": "dedicated" }
     },
     {
       "label": "debug-down",

@@ -1,30 +1,28 @@
 # LiteLLM proxy configuration.
 #
-# - Routes the model names your app calls ("A", "B", "C", ...) to local Ollama
-#   tags. Add one block per model you want to rotate, then:
-#     docker compose --profile amd exec ollama ollama pull <tag>
-#     docker compose --profile amd up -d litellm-amd
+# - Routes the model name your app calls ("A", "B", "C", ...) to an upstream
+#   LLM. The upstream is configured entirely via environment variables set on
+#   the litellm container (see .env: LLM_UPSTREAM_MODEL / _API_BASE / _API_KEY),
+#   so you can point at a cloud provider (OpenAI, Anthropic, Azure), a
+#   self-deployed server (vLLM, TGI), or an Ollama you run on the host
+#   (LLM_UPSTREAM_API_BASE=http://host.docker.internal:11434) without editing
+#   this file.
 # - Writes a full audit (request messages + response, tokens, cost, latency) to
 #   Postgres (LiteLLM_SpendLogs table) via DATABASE_URL. Message logging is ON
 #   by default; do NOT set turn_off_message_logging if you want the payloads.
 
 model_list:
-  # Example: the app calls model "A"; LiteLLM forwards to the Ollama tag
-  # "llama3.2" at the ollama service (alias resolves to the active vendor).
+  # The app calls model "A"; LiteLLM forwards to LLM_UPSTREAM_MODEL at
+  # LLM_UPSTREAM_API_BASE, authenticating with LLM_UPSTREAM_API_KEY.
+  # Use a LiteLLM provider prefix, e.g. openai/gpt-4o-mini,
+  # anthropic/claude-3-5-sonnet, ollama/llama3.2.
   - model_name: A
     litellm_params:
-      model: ollama/llama3.2
-      api_base: http://ollama:11434
+      model: os.environ/LLM_UPSTREAM_MODEL
+      api_base: os.environ/LLM_UPSTREAM_API_BASE
+      api_key: os.environ/LLM_UPSTREAM_API_KEY
 
-  # - model_name: B
-  #   litellm_params:
-  #     model: ollama/qwen2.5:7b
-  #     api_base: http://ollama:11434
-
-  # - model_name: C
-  #   litellm_params:
-  #     model: ollama/mymodel            # e.g. a GGUF imported via `ollama create`
-  #     api_base: http://ollama:11434
+  # Add more aliases (B, C, ...) to rotate between upstream models.
 
 litellm_settings:
   drop_params: true

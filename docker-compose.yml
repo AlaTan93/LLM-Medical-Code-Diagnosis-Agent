@@ -1,12 +1,14 @@
 # medicoder-technical
 #
-# Default (2 containers) : docker compose up                         # program + postgres; LLM is external
-# AMD GPU  (4 containers): docker compose --profile amd up          # adds ollama + litellm (ROCm)
-# NVIDIA   (4 containers): docker compose --profile nvidia up       # adds ollama + litellm (CUDA)
+# Default (3 containers): docker compose up --build
+#   postgres + medicoder + litellm
 #
-# The AMD and NVIDIA ollama/litellm services share network aliases ("ollama",
-# "litellm"), so the program's LLM_BASE_URL (http://litellm:4000/v1) and the
-# litellm->ollama link (http://ollama:11434) work regardless of vendor profile.
+# LiteLLM is always hosted locally. It routes the model alias the app calls
+# (e.g. "A") to an upstream LLM configured in .env — any OpenAI-compatible
+# endpoint works: a cloud provider (OpenAI, Anthropic, Azure), a self-deployed
+# server (vLLM, TGI), or an Ollama you run on the host
+# (LLM_UPSTREAM_API_BASE=http://host.docker.internal:11434).
+# Every call + response is audited to Postgres (LiteLLM_SpendLogs).
 
 services:
   postgres:
@@ -31,6 +33,48 @@ services:
       retries: 30
     restart: unless-stopped
 
+  litellm:
+    # Local proxy: routes the app's model alias ("A") to the upstream LLM and
+    # audits every call/response to Postgres (LiteLLM_SpendLogs via DATABASE_URL
+    # + Prisma migration on first boot).
+    image: ghcr.io/berriai/litellm:main-stable
+    volumes:
+      - ./docker/litellm/config.yaml:/app/config.yaml:ro
+    environment:
+      DATABASE_URL: postgresql://litellm:${LITELLM_DB_PASSWORD:?set LITELLM_DB_PASSWORD in .env}@postgres:5432/litellm
+      # Upstream the alias "A" resolves to (see docker/litellm/config.yaml).
+      # Use a LiteLLM provider prefix, e.g. openai/gpt-4o-mini, anthropic/claude-...
+      LLM_UPSTREAM_MODEL: ${LLM_UPSTREAM_MODEL:?set LLM_UPSTREAM_MODEL in .env}
+      LLM_UPSTREAM_API_BASE: ${LLM_UPSTREAM_API_BASE:?set LLM_UPSTREAM_API_BASE in .env}
+      LLM_UPSTREAM_API_KEY: ${LLM_UPSTREAM_API_KEY:?set LLM_UPSTREAM_API_KEY in .env}
+      # Uncomment + the master_key line in config.yaml to require auth on the proxy.
+      # LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
+    command:
+      - "--config"
+      - "/app/config.yaml"
+      - "--port"
+      - "4000"
+      - "--host"
+      - "0.0.0.0"
+    ports:
+      - "4000:4000"
+    # Lets the proxy reach an LLM you run on the host (e.g. a local Ollama).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      # curl-free (the image may not ship curl); /health/liveliness returns 200 fast.
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:4000/health/liveliness',timeout=5).status==200 else 1)"
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   medicoder:
     build:
       context: .
@@ -43,144 +87,20 @@ services:
       PGUSER: medicoder
       PGPASSWORD: ${MEDICODER_PASSWORD:?set MEDICODER_PASSWORD in .env}
       ICD10_FILE: /app/icd10cm_order_2026.txt
-      # Program points its OpenAI-compatible client at LiteLLM (or an external endpoint).
+      # Points at the local LiteLLM proxy (alias -> upstream LLM).
       LLM_BASE_URL: ${LLM_BASE_URL:-http://litellm:4000/v1}
       # Model alias defined in docker/litellm/config.yaml (e.g. "A").
       LLM_MODEL: ${LLM_MODEL:-A}
+    volumes:
+      # Read-only ICD-10 source data. The app reads data/... (relative);
+      # this mount restores the host's data/ layout that COPY flattens in the image.
+      - ./data:/app/data:ro
     depends_on:
       postgres:
         condition: service_healthy
-    restart: unless-stopped
-
-  # ---- Ollama: AMD Radeon (ROCm / HIP) --------------------------------------
-  # Primary target. RX 7900 XTX = gfx1100 (officially supported by ROCm).
-  # OLLAMA_MAX_LOADED_MODELS=1 + OLLAMA_KEEP_ALIVE keep VRAM bounded: only one
-  # model resident at a time, auto-unloaded after the idle window expires.
-  ollama-amd:
-    image: ollama/ollama:rocm
-    profiles: ["amd"]
-    networks:
-      default:
-        aliases: ["ollama"]
-    devices:
-      - /dev/kfd:/dev/kfd
-      - /dev/dri:/dev/dri
-    group_add:
-      - render
-      - video
-    security_opt:
-      - seccomp:unconfined
-    cap_add:
-      - SYS_PTRACE
-    ipc: host
-    environment:
-      OLLAMA_HOST: 0.0.0.0:11434
-      OLLAMA_MAX_LOADED_MODELS: ${OLLAMA_MAX_LOADED_MODELS:-1}
-      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-5m}
-      HSA_OVERRIDE_GFX_VERSION: ${HSA_OVERRIDE_GFX_VERSION:-gfx1100}
-    volumes:
-      - ollama-models:/root/.ollama
-      - ./models:/models:ro
-    ports:
-      - "11434:11434"
-    restart: unless-stopped
-
-  # ---- Ollama: NVIDIA (CUDA) fallback ---------------------------------------
-  ollama-nvidia:
-    image: ollama/ollama
-    profiles: ["nvidia"]
-    networks:
-      default:
-        aliases: ["ollama"]
-    environment:
-      OLLAMA_HOST: 0.0.0.0:11434
-      OLLAMA_MAX_LOADED_MODELS: ${OLLAMA_MAX_LOADED_MODELS:-1}
-      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-5m}
-    volumes:
-      - ollama-models:/root/.ollama
-      - ./models:/models:ro
-    ports:
-      - "11434:11434"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: ["gpu"]
-    restart: unless-stopped
-
-  # ---- LiteLLM proxy: AMD ---------------------------------------------------
-  # Routes model aliases (A/B/C ...) to Ollama tags and audits every call +
-  # response to Postgres (LiteLLM_SpendLogs via DATABASE_URL + Prisma migration).
-  litellm-amd:
-    image: ghcr.io/berriai/litellm:main-stable
-    profiles: ["amd"]
-    networks:
-      default:
-        aliases: ["litellm"]
-    volumes:
-      - ./docker/litellm/config.yaml:/app/config.yaml:ro
-    environment:
-      DATABASE_URL: postgresql://litellm:${LITELLM_DB_PASSWORD:?set LITELLM_DB_PASSWORD in .env}@postgres:5432/litellm
-      # Uncomment the next line + the master_key line in config.yaml to require auth.
-      # LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
-    command:
-      - "--config"
-      - "/app/config.yaml"
-      - "--port"
-      - "4000"
-      - "--host"
-      - "0.0.0.0"
-    ports:
-      - "4000:4000"
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:4000/health/liveliness || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-    depends_on:
-      postgres:
-        condition: service_healthy
-      ollama-amd:
-        condition: service_started
-    restart: unless-stopped
-
-  # ---- LiteLLM proxy: NVIDIA ------------------------------------------------
-  litellm-nvidia:
-    image: ghcr.io/berriai/litellm:main-stable
-    profiles: ["nvidia"]
-    networks:
-      default:
-        aliases: ["litellm"]
-    volumes:
-      - ./docker/litellm/config.yaml:/app/config.yaml:ro
-    environment:
-      DATABASE_URL: postgresql://litellm:${LITELLM_DB_PASSWORD:?set LITELLM_DB_PASSWORD in .env}@postgres:5432/litellm
-      # LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
-    command:
-      - "--config"
-      - "/app/config.yaml"
-      - "--port"
-      - "4000"
-      - "--host"
-      - "0.0.0.0"
-    ports:
-      - "4000:4000"
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:4000/health/liveliness || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-    depends_on:
-      postgres:
-        condition: service_healthy
-      ollama-nvidia:
+      litellm:
         condition: service_started
     restart: unless-stopped
 
 volumes:
   pgdata:
-  ollama-models:
