@@ -19,3 +19,11 @@ dependencies = [
 dev = [
     "debugpy>=1.8",
 ]
+# Host-side model pre-pull script (pull_models_before_build.py). NEVER installed
+# into any image: the Dockerfile uses `--no-dev` (excludes `dev`) and never
+# passes `--group bootstrap`, and named groups aren't installed by default.
+# Run on the host via: uv run --group bootstrap python pull_models_before_build.py
+bootstrap = [
+    "huggingface_hub>=0.25",
+    "requests>=2.31",
+]

@@ -1,6 +1,8 @@
 # medicoder-technical
 
-ICD-10-CM medical coding prototype. The stack runs as 3 containers:
+ICD-10-CM medical coding prototype. The default stack runs as 3 containers
+(an optional 4th, in-container Ollama, is added under a GPU profile — see
+[Local GPU LLM](#optional-local-gpu-llm-in-container-ollama)):
 
 | Service    | Image                                 | Role                                                                  |
 | ---------- | ------------------------------------- | -------------------------------------------------------------------- |
@@ -18,6 +20,8 @@ server (vLLM, TGI), or an Ollama you run on the host.
 
 - Docker + Compose v2.
 - An upstream LLM endpoint + API key (cloud or self-deployed); see `.env`.
+- `uv` (Astral) — only needed for the host-side pre-pull script
+  (`uv run --group bootstrap ...`); see [Pre-pull models](#pre-pull-models-one-time-bootstrap).
 
 ## Setup
 
@@ -53,6 +57,13 @@ Common choices:
 
 Add more aliases (B, C, ...) in `docker/litellm/config.yaml` to rotate models.
 
+**Heads-up — GPU overlay overrides the upstream.** Running a `gpu-amd` /
+`gpu-nvidia` profile loads `docker/docker-compose.gpu.yml`, which sets
+`LLM_UPSTREAM_MODEL` / `_API_BASE` / `_API_KEY` on the `litellm` container to
+point at the in-container Ollama. Your `.env` upstream values are **ignored**
+in that mode; they apply only in the default stack (and the `debug-up-cloud`
+task).
+
 **Audit log:** every LLM call and its response are written to the `LiteLLM_SpendLogs`
 table in the `litellm` database. Query it:
 
@@ -85,6 +96,40 @@ The served model is `OLLAMA_MODEL` (default `llama3.2`; see `.env.example`).
 LiteLLM's alias then resolves to `ollama/${OLLAMA_MODEL}` at `http://ollama:11434`.
 The two GPU services are mutually exclusive (host port `11434` + shared alias),
 so down one profile before up-ing the other.
+
+## Pre-pull models (one-time bootstrap)
+
+`pull_models_before_build.py` populates the `ollama-models` volume with a
+configurable list **before** the app serves — useful when you want specific HF
+GGUF quants (not just registry tags) ready at first request. Run it on the host
+after the GPU Ollama container is up:
+
+```bash
+docker compose --env-file .env -f docker-compose.yml \
+   -f docker/docker-compose.gpu.yml --profile gpu-amd up -d ollama-amd
+uv run --group bootstrap python pull_models_before_build.py   # --dry-run to preview
+```
+
+The list lives in `models.toml`. Two entry kinds:
+
+```toml
+[[model]]
+kind = "ollama"            # registry pull (POST /api/pull)
+name = "llama3.2"
+
+[[model]]
+kind = "hf"               # HuggingFace GGUF -> /api/blobs -> /api/create
+repo = "bartowski/Llama-3.2-3B-Instruct-GGUF"
+file = "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+name = "llama3.2-3b-q4"   # local Ollama name after import
+```
+
+Re-runs are idempotent (existing models are skipped; HF downloads hit the local
+`~/.cache/huggingface/hub` cache). `OLLAMA_BASE_URL` and `HF_TOKEN` are read
+from `.env` (no need to pass them on the CLI); `HF_TOKEN` is only required for
+gated repos. The `bootstrap` dep group is host-only — it is never installed
+into the production image (the Dockerfile's `uv sync --no-dev` skips named
+groups).
 
 ## What the loader does
 
@@ -184,6 +229,8 @@ docker/postgres/02-litellm.sh  litellm role + audit database
 docker/postgres/02-embedding.sql.example  optional pgvector column/index
 docker/litellm/config.yaml     LiteLLM alias -> upstream routing + DB logging
 medicoder/db/load_icd10.py     fixed-width -> COPY loader
+pull_models_before_build.py    host-side Ollama model pre-pull (registry + HF GGUF)
+models.toml                    model list for pull_models_before_build.py
 .vscode/{launch,tasks,extensions}.json  VSCode container debugging
 .env.example                   all configuration
 ```
