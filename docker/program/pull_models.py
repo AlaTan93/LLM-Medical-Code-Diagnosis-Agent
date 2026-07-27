@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
-"""Sidecar: auto-pull every ``ollama``-kind model in models.toml into the
-running Ollama when the GPU compose stack comes up.
+"""Sidecar: auto-pull every model in models.toml into the running Ollama when
+the GPU compose stack comes up.
 
 Run by the ``ollama-init`` service in docker/docker-compose.gpu.yml (profiles
 gpu-amd / gpu-nvidia). It polls http://ollama:11434 until the active Ollama
 service is reachable (whichever GPU vendor is up), then POSTs /api/pull for each
-registry entry, skipping anything already present.
-
-``hf``-kind entries are NOT handled here (use the host-side
-pull_models_before_build.py for HF GGUF imports). This script is stdlib-only so
-the sidecar runs in a plain python:3.13-slim container with no pip installs.
+entry, skipping anything already present. Stdlib-only, so the sidecar runs in a
+plain python:3.13-slim container with no pip installs.
 
 Fire-and-forget: nothing depends on this container, so it pulls in parallel with
 the medicoder app and exits when done.
@@ -40,7 +37,11 @@ def load_models(path: Path) -> list[dict]:
         print(f"pull_models: {path} not found; nothing to pull")
         return []
     data = tomllib.loads(path.read_text(encoding="utf-8"))
-    return list(data.get("model", []))
+    entries = list(data.get("model", []))
+    for i, e in enumerate(entries):
+        if "name" not in e:
+            raise SystemExit(f"{path}: entry #{i} missing 'name'")
+    return entries
 
 
 # --------------------------------------------------------------------------- #
@@ -119,16 +120,9 @@ def main() -> int:
     args = parser.parse_args()
 
     models = load_models(args.config)
-    ollama_entries = [m for m in models if m.get("kind") == "ollama"]
-    for m in models:
-        if m.get("kind") == "hf":
-            print(
-                f"pull_models: skipping '{m.get('name')}' (kind=hf) — "
-                "use the host pull_models_before_build.py for HF GGUF import"
-            )
 
-    if not ollama_entries:
-        print("pull_models: no ollama-kind entries; exiting.")
+    if not models:
+        print("pull_models: no entries; exiting.")
         return 0
 
     deadline = time.time() + POLL_TIMEOUT
@@ -136,9 +130,12 @@ def main() -> int:
     existing = get_existing(args.base_url)
 
     failures: list[str] = []
-    for entry in ollama_entries:
+    for entry in models:
         name = entry["name"]
-        if name in existing:
+        # Ollama stores models with an explicit tag (e.g. "foo:latest"); a
+        # tagless name in models.toml resolves to :latest, so check both.
+        aliases = {name, name if ":" in name else f"{name}:latest"}
+        if existing & aliases:
             print(f"[skip] {name}  (already present)")
             continue
         try:
@@ -153,7 +150,7 @@ def main() -> int:
     if failures:
         print(f"\npull_models: {len(failures)} failure(s): {', '.join(failures)}")
         return 1
-    n = len(ollama_entries)
+    n = len(models)
     print(f"\npull_models: done ({n} entr{'y' if n == 1 else 'ies'}).")
     return 0
 

@@ -20,8 +20,6 @@ server (vLLM, TGI), or an Ollama you run on the host.
 
 - Docker + Compose v2.
 - An upstream LLM endpoint + API key (cloud or self-deployed); see `.env`.
-- `uv` (Astral) — only needed for the host-side pre-pull script
-  (`uv run --group bootstrap ...`); see [Pre-pull models](#pre-pull-models-one-time-bootstrap).
 
 ## Setup
 
@@ -84,12 +82,11 @@ stack stays env-only; the overlay is opt-in.
 | AMD (ROCm) | `docker compose -f docker-compose.yml -f docker/docker-compose.gpu.yml --profile gpu-amd up` |
 | NVIDIA (CUDA) | `docker compose -f docker-compose.yml -f docker/docker-compose.gpu.yml --profile gpu-nvidia up` |
 
-Models listed as `kind = "ollama"` in `models.toml` **auto-pull** when the stack
-comes up: an `ollama-init` sidecar (profile-gated, stdlib-only) polls
-`http://ollama:11434` until the GPU Ollama is ready, then `POST /api/pull`s each
-entry, skipping any already present. It's fire-and-forget — nothing depends on
-it, so models arrive in parallel with the app. (`kind = "hf"` GGUF imports are
-not handled by the sidecar; use `pull_models_before_build.py` for those.)
+Models listed in `models.toml` **auto-pull** when the stack comes up: an
+`ollama-init` sidecar (profile-gated, stdlib-only) polls `http://ollama:11434`
+until the GPU Ollama is ready, then `POST /api/pull`s each entry, skipping any
+already present. It's fire-and-forget — nothing depends on it, so models arrive
+in parallel with the app.
 
 For a one-off manual pull (into the shared `ollama-models` volume), match the
 service name to the profile:
@@ -101,44 +98,34 @@ docker compose -f docker-compose.yml -f docker/docker-compose.gpu.yml \
 
 The served model is `OLLAMA_MODEL` (default `llama3.2`; see `.env.example`).
 LiteLLM's alias then resolves to `ollama/${OLLAMA_MODEL}` at `http://ollama:11434`.
-The two GPU services are mutually exclusive (host port `11434` + shared alias),
-so down one profile before up-ing the other.
 
-## Pre-pull models (one-time bootstrap)
+The container Ollama is **fully isolated**: it publishes no host port, so it
+never clashes with an Ollama you run on the host (e.g. a native one on 11434).
+It's reachable only inside the compose network as `http://ollama:11434`. The two
+GPU services share that alias, so down one profile before up-ing the other.
 
-`pull_models_before_build.py` populates the `ollama-models` volume with a
-configurable list **before** the app serves — useful when you want specific HF
-GGUF quants (not just registry tags) ready at first request. Run it on the host
-after the GPU Ollama container is up:
+## Pre-pull models (automatic)
 
-```bash
-docker compose --env-file .env -f docker-compose.yml \
-   -f docker/docker-compose.gpu.yml --profile gpu-amd up -d ollama-amd
-uv run --group bootstrap python pull_models_before_build.py   # --dry-run to preview
-```
-
-The list lives in `models.toml`. Two entry kinds:
+Models for the in-container Ollama are pulled automatically by the `ollama-init`
+sidecar when the GPU stack comes up — no manual step. Edit **`models.toml`** to
+list the Ollama-registry tags you want available:
 
 ```toml
 [[model]]
-kind = "ollama"            # registry pull (POST /api/pull)
-name = "llama3.2"
+name = "lastmass/Qwen3_Medical_GRPO"
 
 [[model]]
-kind = "hf"               # HuggingFace GGUF -> /api/blobs -> /api/create
-repo = "bartowski/Llama-3.2-3B-Instruct-GGUF"
-file = "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
-name = "llama3.2-3b-q4"   # local Ollama name after import
+name = "llama3.2"
 ```
 
-Re-runs are idempotent (existing models are skipped; HF downloads hit the local
-`~/.cache/huggingface/hub` cache). `OLLAMA_BASE_URL` and `HF_TOKEN` are read
-from `.env` (no need to pass them on the CLI); `HF_TOKEN` is only required for
-gated repos. HF entries download **flat into `models/`** (set `MODELS_DIR` to
-relocate; `*.gguf`/`*.bin` are gitignored); Ollama ingests its own copy into the
-`ollama-models` volume. The `bootstrap` dep group is host-only — it is never
-installed into the production image (the Dockerfile's `uv sync --no-dev` skips
-named groups).
+Each entry is a registry tag (also the local Ollama name). Re-runs are
+idempotent: anything already in `/api/tags` is skipped, so the sidecar only
+pulls what's missing. For a one-off pull outside the sidecar:
+
+```bash
+docker compose -f docker-compose.yml -f docker/docker-compose.gpu.yml \
+   --profile gpu-amd exec ollama-amd ollama pull <model>
+```
 
 ## What the loader does
 
@@ -239,8 +226,7 @@ docker/postgres/02-litellm.sh  litellm role + audit database
 docker/postgres/02-embedding.sql.example  optional pgvector column/index
 docker/litellm/config.yaml     LiteLLM alias -> upstream routing + DB logging
 medicoder/db/load_icd10.py     fixed-width -> COPY loader
-pull_models_before_build.py    host-side Ollama model pre-pull (registry + HF GGUF)
-models.toml                    model list for pull_models_before_build.py
+models.toml                    registry models for the ollama-init sidecar
 .vscode/{launch,tasks,extensions}.json  VSCode container debugging
 .env.example                   all configuration
 ```

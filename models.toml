@@ -1,31 +1,15 @@
-# Models to pre-populate Ollama with before the medicoder app serves.
+# Models to pre-populate the in-container Ollama with when the GPU stack comes
+# up. Read by the `ollama-init` sidecar in docker/docker-compose.gpu.yml, which
+# polls http://ollama:11434 until the GPU Ollama is ready, then POSTs /api/pull
+# for each entry below (in parallel with the app), skipping any already present.
 #
-# `ollama`-kind entries AUTO-PULL when the GPU stack comes up: the `ollama-init`
-# sidecar in docker/docker-compose.gpu.yml reads this file and POSTs /api/pull
-# for each, in parallel with the app. `hf`-kind entries are not auto-pulled —
-# run pull_models_before_build.py on the host for HF GGUF imports.
-#
-# Each [[model]] block is one of two kinds:
-#
-#   kind = "ollama"   Pull from the Ollama registry by tag.
-#                     `name` is both the registry tag and the local Ollama name.
-#                     Auto-pulled by the ollama-init sidecar on `compose up`.
-#
-#   kind = "hf"       Download a GGUF file directly from HuggingFace and import
-#                     it into Ollama. Use this for quants/repos that aren't on
-#                     the Ollama registry (e.g. bartowski/..., unsloth/...).
-#                     Requires the host pull_models_before_build.py (bootstrap dep group).
-#
-# Re-runs are idempotent: anything already in /api/tags is skipped.
+# Each [[model]] block pulls a model from the Ollama registry by tag. `name` is
+# both the registry tag and the local Ollama name. Re-runs are idempotent.
 
-# --- Registry example (uncomment to use) -------------------------------------
 [[model]]
-kind = "ollama"
 name = "lastmass/Qwen3_Medical_GRPO"
 
-# --- HuggingFace GGUF example (uncomment + edit) -----------------------------
+# Add more registry models, e.g.:
 # [[model]]
-# kind = "hf"
-# repo = "bartowski/Llama-3.2-3B-Instruct-GGUF"
-# file = "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
-# name = "llama3.2-3b-q4"   # local Ollama name after import
+# name = "llama3.2"
+
