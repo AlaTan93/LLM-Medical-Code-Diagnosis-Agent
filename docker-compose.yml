@@ -91,6 +91,8 @@ services:
       LLM_BASE_URL: ${LLM_BASE_URL:-http://litellm:4000/v1}
       # Model alias defined in docker/litellm/config.yaml (e.g. "A").
       LLM_MODEL: ${LLM_MODEL:-A}
+    ports:
+      - "8000:8000"
     volumes:
       # Read-only ICD-10 source data. The app reads data/... (relative);
       # this mount restores the host's data/ layout that COPY flattens in the image.
