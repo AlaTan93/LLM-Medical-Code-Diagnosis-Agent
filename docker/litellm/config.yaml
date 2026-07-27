@@ -22,7 +22,25 @@ model_list:
       api_base: os.environ/LLM_UPSTREAM_API_BASE
       api_key: os.environ/LLM_UPSTREAM_API_KEY
 
-  # Add more aliases (B, C, ...) to rotate between upstream models.
+  # In-container Ollama medical models (gpu-amd / gpu-nvidia profiles).
+  # Hardcoded to http://ollama:11434 — dormant in cloud mode (errors only if
+  # called). LiteLLM splits the provider on the first "/", so e.g.
+  # ollama/hf.co/...:Q8_0 -> provider=ollama, model=hf.co/...:Q8_0.
+  - model_name: medical-grpo
+    litellm_params:
+      model: ollama/lastmass/Qwen3_Medical_GRPO
+      api_base: http://ollama:11434
+      api_key: dummy
+  - model_name: ii-medical-q8
+    litellm_params:
+      model: ollama/hf.co/Intelligent-Internet/II-Medical-8B-1706-GGUF:Q8_0
+      api_base: http://ollama:11434
+      api_key: dummy
+  - model_name: qwen35-medical
+    litellm_params:
+      model: ollama/hf.co/qaootkcx/qwen35-9b-medical:Q4_K_M
+      api_base: http://ollama:11434
+      api_key: dummy
 
 litellm_settings:
   drop_params: true

@@ -56,8 +56,10 @@ services:
       - "4000"
       - "--host"
       - "0.0.0.0"
-    ports:
-      - "4000:4000"
+    # No host port published: LiteLLM is in-network only (reachable as
+    # http://litellm:4000/v1 by the medicoder app), so the only public way to
+    # reach the models is through the app's POST /test/{model} endpoint.
+    # The healthcheck below is intra-container (localhost:4000) and still works.
     # Lets the proxy reach an LLM you run on the host (e.g. a local Ollama).
     extra_hosts:
       - "host.docker.internal:host-gateway"

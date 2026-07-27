@@ -127,6 +127,27 @@ docker compose -f docker-compose.yml -f docker/docker-compose.gpu.yml \
    --profile gpu-amd exec ollama-amd ollama pull <model>
 ```
 
+## Testing models (POST /test/{model})
+
+LiteLLM has **no host port** (in-network only), so the models can't be reached
+directly from the host. The app exposes a temporary testing endpoint that calls
+LiteLLM internally. `model` is a LiteLLM alias from `docker/litellm/config.yaml`
+(e.g. `ii-medical-q8`, `medical-grpo`, `qwen35-medical`, `A`):
+
+```bash
+# default medical prompt
+curl -X POST http://localhost:8000/test/qwen35-medical
+
+# custom prompt
+curl -X POST http://localhost:8000/test/ii-medical-q8 \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"What is the ICD-10-CM code for essential hypertension?"}'
+```
+
+Returns `{"model","prompt","response","elapsed_s"}`. Unknown alias → `404`;
+LiteLLM unreachable → `502`; model-load timeout → `504`. (First call per model
+loads it into VRAM, ~10–60s.)
+
 ## What the loader does
 
 On every boot `medicoder` runs `medicoder.db.load_icd10`, which parses the

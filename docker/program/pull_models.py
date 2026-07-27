@@ -75,6 +75,7 @@ def pull_one(base: str, name: str) -> None:
         method="POST",
     )
     last_status = None
+    saw_success = False
     # timeout=None: a pull can run for many minutes (multi-GB); don't abort mid-stream.
     with urllib.request.urlopen(req, timeout=None) as resp:
         for raw in resp:  # iterating yields newline-delimited bytes
@@ -84,6 +85,11 @@ def pull_one(base: str, name: str) -> None:
                 msg = json.loads(raw)
             except json.JSONDecodeError:
                 continue
+            # Ollama reports failures as {"error": "..."} in the stream — detect
+            # them so we don't log a false [ok] for a pull that downloaded nothing.
+            if msg.get("error"):
+                _progress_done()
+                raise RuntimeError(f"ollama: {msg['error']}")
             status = msg.get("status", "")
             total = msg.get("total")
             completed = msg.get("completed")
@@ -94,8 +100,11 @@ def pull_one(base: str, name: str) -> None:
                 print(f"    {status}")
                 last_status = status
                 if status == "success":
+                    saw_success = True
                     return
     _progress_done()
+    if not saw_success:
+        raise RuntimeError("pull stream ended without a success status")
 
 
 def _progress(label: str, done: int, total: int) -> None:
@@ -127,25 +136,38 @@ def main() -> int:
 
     deadline = time.time() + POLL_TIMEOUT
     wait_for_ollama(args.base_url, deadline)
-    existing = get_existing(args.base_url)
+    # Case-insensitive: Ollama lowercases names in /api/tags (e.g. hf.co/...).
+    existing = {e.lower() for e in get_existing(args.base_url)}
 
+    attempted: list[str] = []  # entries that returned [ok] from pull_one
     failures: list[str] = []
     for entry in models:
         name = entry["name"]
         # Ollama stores models with an explicit tag (e.g. "foo:latest"); a
         # tagless name in models.toml resolves to :latest, so check both.
-        aliases = {name, name if ":" in name else f"{name}:latest"}
+        aliases = {a.lower() for a in {name, name if ":" in name else f"{name}:latest"}}
         if existing & aliases:
             print(f"[skip] {name}  (already present)")
             continue
         try:
             pull_one(args.base_url, name)
-            existing.add(name)
+            attempted.append(name)
             print(f"[ok]   {name}")
         except Exception as e:  # noqa: BLE001 - report and continue
             _progress_done()
             print(f"[fail] {name}: {e}")
             failures.append(name)
+
+    # Defense in depth: re-fetch /api/tags and confirm each "ok" actually
+    # registered. Catches silent failures where Ollama streams success but the
+    # model doesn't land (e.g. wrong repo, empty manifest).
+    if attempted:
+        landed = {e.lower() for e in get_existing(args.base_url)}
+        for name in attempted:
+            aliases = {a.lower() for a in {name, name if ":" in name else f"{name}:latest"}}
+            if not (landed & aliases):
+                print(f"[fail] {name}: pull reported success but model is absent from /api/tags")
+                failures.append(name)
 
     if failures:
         print(f"\npull_models: {len(failures)} failure(s): {', '.join(failures)}")

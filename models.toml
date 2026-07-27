@@ -9,6 +9,12 @@
 [[model]]
 name = "lastmass/Qwen3_Medical_GRPO"
 
+[[model]]
+name = "hf.co/Intelligent-Internet/II-Medical-8B-1706-GGUF:Q8_0"
+
+[[model]]
+name = "hf.co/qaootkcx/qwen35-9b-medical:Q4_K_M"
+
 # Add more registry models, e.g.:
 # [[model]]
 # name = "llama3.2"

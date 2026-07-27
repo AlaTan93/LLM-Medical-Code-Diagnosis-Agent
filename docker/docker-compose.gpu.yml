@@ -38,6 +38,10 @@ services:
     devices:
       - /dev/kfd
       - /dev/dri
+    environment:
+      # The Ollama SERVER (not the ollama-init sidecar) performs hf.co/ pulls,
+      # so it needs the HF token in its own env. Read from .env.
+      HF_TOKEN: ${HF_TOKEN:-}
     volumes:
       - ollama-models:/root/.ollama
     networks:
@@ -56,6 +60,8 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
     volumes:
       - ollama-models:/root/.ollama
     networks:
