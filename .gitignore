@@ -21,4 +21,5 @@ MLE (LLM) - Take Home Assignment.pdf
 .env
 models/*.gguf
 models/*.bin
+models/.cache/
 .vscode

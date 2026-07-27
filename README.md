@@ -127,9 +127,11 @@ name = "llama3.2-3b-q4"   # local Ollama name after import
 Re-runs are idempotent (existing models are skipped; HF downloads hit the local
 `~/.cache/huggingface/hub` cache). `OLLAMA_BASE_URL` and `HF_TOKEN` are read
 from `.env` (no need to pass them on the CLI); `HF_TOKEN` is only required for
-gated repos. The `bootstrap` dep group is host-only — it is never installed
-into the production image (the Dockerfile's `uv sync --no-dev` skips named
-groups).
+gated repos. HF entries download **flat into `models/`** (set `MODELS_DIR` to
+relocate; `*.gguf`/`*.bin` are gitignored); Ollama ingests its own copy into the
+`ollama-models` volume. The `bootstrap` dep group is host-only — it is never
+installed into the production image (the Dockerfile's `uv sync --no-dev` skips
+named groups).
 
 ## What the loader does
 

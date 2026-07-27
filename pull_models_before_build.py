@@ -44,6 +44,7 @@ from huggingface_hub import hf_hub_download
 REPO_ROOT = Path(__file__).resolve().parent
 DEFAULT_CONFIG = REPO_ROOT / "models.toml"
 DEFAULT_ENV = REPO_ROOT / ".env"
+DEFAULT_MODELS_DIR = "models"  # HF GGUFs download flat here (repo-relative).
 CHUNK = 1024 * 1024  # 1 MiB for hashing / uploading / progress.
 
 
@@ -126,13 +127,21 @@ def import_hf(
     file: str,
     name: str,
     token: str | None,
+    models_dir: Path,
     session: requests.Session,
 ) -> None:
-    """Download a GGUF from HuggingFace and import it into Ollama."""
+    """Download a GGUF from HuggingFace into ``models_dir`` and import it into Ollama.
+
+    ``local_dir`` makes hf_hub_download place a flat ``models_dir/<file>`` (no
+    nested cache layout), so the GGUF is visible/inspectable and matches the
+    ``models/`` convention (gitignored for *.gguf/*.bin).
+    """
     print(f"  downloading from HF: {repo}/{file}")
-    local = hf_hub_download(repo_id=repo, filename=file, token=token or None)
+    local = hf_hub_download(
+        repo_id=repo, filename=file, token=token or None, local_dir=str(models_dir)
+    )
     size = Path(local).stat().st_size
-    print(f"    cached at {local} ({size:,} bytes)")
+    print(f"    saved at {local} ({size:,} bytes)")
 
     print("    hashing (sha256) ...")
     digest = sha256_file(local)
@@ -225,12 +234,22 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="print the plan and what would be skipped, then exit")
     parser.add_argument("--keep-going", action="store_true", help="continue past failures (exit code still non-zero if any failed)")
     parser.add_argument("--no-env-file", action="store_true", help=f"do not load {DEFAULT_ENV.name} (use real env only)")
+    parser.add_argument("--models-dir", default=None,
+                        help=f"directory for HF GGUF downloads (default: $MODELS_DIR or {DEFAULT_MODELS_DIR!r})")
     args = parser.parse_args()
 
     if not args.no_env_file:
         load_env(DEFAULT_ENV)
     # Re-read after loading .env so --base-url default can reflect it if unset on CLI.
     base_url = args.base_url
+
+    # Resolve the download dir: CLI > shell env > .env (loaded above) > default.
+    # Resolved after load_env so MODELS_DIR set in .env is honored.
+    models_dir_raw = args.models_dir or os.environ.get("MODELS_DIR", DEFAULT_MODELS_DIR)
+    models_dir = Path(models_dir_raw)
+    if not models_dir.is_absolute():
+        models_dir = (REPO_ROOT / models_dir).resolve()
+    models_dir.mkdir(parents=True, exist_ok=True)
 
     models = load_models(args.config)
     token = os.environ.get("HF_TOKEN") or None
@@ -249,6 +268,7 @@ def main() -> int:
 
     print(f"ollama: {base_url}  ({len(have)} model(s) already present)")
     print(f"plan: {len(models)} entr{'y' if len(models) == 1 else 'ies'} in {args.config.name}")
+    print(f"hf downloads -> {models_dir}")
 
     failures: list[str] = []
     for entry in models:
@@ -267,7 +287,7 @@ def main() -> int:
             if kind == "ollama":
                 pull_ollama(base_url, name, session)
             else:
-                import_hf(base_url, entry["repo"], entry["file"], name, token, session)
+                import_hf(base_url, entry["repo"], entry["file"], name, token, models_dir, session)
             print(f"  done in {time.time() - t0:.1f}s")
             have.add(name)
         except Exception as e:  # noqa: BLE001 - report and move on

@@ -17,9 +17,9 @@
 # downloads hit the local ~/.cache/huggingface/hub cache (resumable).
 
 # --- Registry example (uncomment to use) -------------------------------------
-# [[model]]
-# kind = "ollama"
-# name = "llama3.2"
+[[model]]
+kind = "ollama"
+name = "lastmass/Qwen3_Medical_GRPO"
 
 # --- HuggingFace GGUF example (uncomment + edit) -----------------------------
 # [[model]]
