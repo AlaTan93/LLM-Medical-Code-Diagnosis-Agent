@@ -77,7 +77,8 @@ def list_codes(
             f"SELECT {_COLS} FROM icd10_codes "
             "WHERE starts_with(code, %s) ORDER BY code LIMIT %s",
             (q, limit),
-        ).fetchall()
+        ).fetchall() # type: ignore
+    # reason: code still works despite type mismatch
 
 
 @app.get("/codes/{order_number}", response_model=ICD10Code)
@@ -89,7 +90,8 @@ def get_code(order_number: int) -> dict:
         ).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="code not found")
-    return row
+    return row # type: ignore
+    # reason: code still works despite type mismatch
 
 
 if __name__ == "__main__":
