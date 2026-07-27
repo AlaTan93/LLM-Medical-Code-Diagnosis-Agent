@@ -6,8 +6,8 @@
 #   docker compose --env-file .env \
 #       -f docker-compose.yml -f docker/docker-compose.debug.yml up medicoder
 #
-# In VSCode: set a breakpoint and press F5 (the "debug-up" task starts this
-# stack and waits for the debug port, then the launch config attaches).
+# In VSCode: set a breakpoint and press F5 (the "debug-up" background task
+# streams this output and fires the attach when it sees DEBUGPY_READY).
 #
 # Notes:
 # - This uses SELECTIVE mounts (./medicoder, ./main.py, ./data) so the baked
@@ -17,6 +17,10 @@
 #   first, then `exec`s this command. So breakpoints in the *loader* won't be
 #   hit (it runs before debugpy attaches); see README to debug the loader.
 # - Runs as the non-root `app` user, matching production.
+# - The debug logic lives in docker/program/debug.sh (mounted here) rather than
+#   an inline `sh -c` script: the ENTRYPOINT echoes `$@`, and an inline script
+#   would leak the DEBUGPY_READY marker into the logs and falsely trip the
+#   VSCode task's readiness matcher.
 
 services:
   medicoder:
@@ -32,28 +36,13 @@ services:
       # Live lockfile so `uv sync` picks up dependency changes without a rebuild.
       - ./pyproject.toml:/app/pyproject.toml:ro
       - ./uv.lock:/app/uv.lock:ro
+      # The debug entrypoint (sync deps + readiness marker + debugpy). See file.
+      - ./docker/program/debug.sh:/debug.sh:ro
     environment:
       ICD10_FILE: /app/data/icd10cm_order_2026.txt
       # Silence debugpy's file-validation note (expected with path mappings).
       PYDEVD_DISABLE_FILE_VALIDATION: "1"
-    # `uv sync` (without --no-dev) adds debugpy to the baked container venv,
-    # then debugpy listens and waits for VSCode to attach before running main.py.
-    # -Xfrozen_modules=off avoids missed breakpoints (image compiles bytecode).
-    command:
-      - sh
-      - -c
-      - |
-        uv sync --frozen --no-install-project
-        # Report readiness WITHOUT connecting to :5678 — any TCP connect to
-        # this port is accepted by debugpy (--wait-for-client) as its first
-        # client and races the VSCode attach. Watch /proc/net/tcp instead:
-        # 5678 == 0x1634, LISTEN state == 0A.
-        (
-          for i in $(seq 1 120); do
-            awk '$2 ~ /:1634$/ && $4 == "0A" { ok=1 } END { exit !ok }' /proc/net/tcp \
-              && { echo DEBUGPY_READY; exit 0; }
-            sleep 0.5
-          done
-          echo DEBUGPY_TIMEOUT
-        ) &
-        python -Xfrozen_modules=off -m debugpy --listen 0.0.0.0:5678 --wait-for-client main.py
+    # ENTRYPOINT runs the loader, then execs this. debug.sh syncs deps, emits
+    # DEBUGPY_READY once debugpy is listening (without connecting to :5678),
+    # then runs the app paused for VSCode to attach.
+    command: ["sh", "/debug.sh"]

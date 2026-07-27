@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from typing import AsyncGenerator
 
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
@@ -34,7 +34,7 @@ def _configure(conn) -> None:
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     global _pool
     _pool = ConnectionPool(
         min_size=1,

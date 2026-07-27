@@ -1,0 +1,67 @@
+# Optional in-container GPU Ollama for the medicoder stack.
+#
+# Loaded ON TOP of docker-compose.yml (+ docker-compose.debug.yml for the debug
+# flow) to run the LLM locally on a GPU instead of a cloud/host endpoint. Two
+# mutually-exclusive Ollama services, selected by compose profile; each answers
+# to the network alias `ollama`, so the litellm override below can target
+# http://ollama:11434 regardless of which GPU vendor is active.
+#
+#   AMD (ROCm):    docker compose -f docker-compose.yml \
+#                        -f docker/docker-compose.gpu.yml --profile gpu-amd up
+#   NVIDIA (CUDA): docker compose -f docker-compose.yml \
+#                        -f docker/docker-compose.gpu.yml --profile gpu-nvidia up
+#
+# Default stack stays env-only (cloud / host Ollama); this file is opt-in.
+# Pull a model once (into the shared named volume):
+#   docker compose -f docker-compose.yml -f docker/docker-compose.gpu.yml \
+#       --profile gpu-amd exec ollama-amd ollama pull llama3.2
+#   (use ollama-nvidia and --profile gpu-nvidia on the CUDA box)
+
+services:
+  ollama-amd:
+    image: ollama/ollama:rocm
+    profiles: ["gpu-amd"]
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    volumes:
+      - ollama-models:/root/.ollama
+    ports:
+      - "11434:11434"
+    networks:
+      default:
+        aliases:
+          - ollama
+    restart: unless-stopped
+
+  ollama-nvidia:
+    image: ollama/ollama:latest
+    profiles: ["gpu-nvidia"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - ollama-models:/root/.ollama
+    ports:
+      - "11434:11434"
+    networks:
+      default:
+        aliases:
+          - ollama
+    restart: unless-stopped
+
+  # Whenever this overlay is loaded, repoint LiteLLM's alias at the local
+  # Ollama (whichever GPU service is active via its profile). These env vars
+  # override the .env values set on the base litellm service.
+  litellm:
+    environment:
+      LLM_UPSTREAM_MODEL: ollama/${OLLAMA_MODEL:-llama3.2}
+      LLM_UPSTREAM_API_BASE: http://ollama:11434
+      LLM_UPSTREAM_API_KEY: dummy
+
+volumes:
+  ollama-models:

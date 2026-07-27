@@ -1,19 +1,21 @@
 {
   // Debugging the medicoder app running in the Docker container.
   //
+  // DECOUPLED model: this config ONLY attaches. Start the stack first by running
+  // one of the debug-up-* tasks (cloud / amd / nvidia) from Run Task or the
+  // terminal panel, wait for DEBUGPY_READY in that terminal, then press F5 here.
+  //
+  // Detaching (Shift+F5) leaves the stack running — re-attach with F5 anytime.
+  // Tear the stack down with the matching debug-down-* task when you're done.
+  //
   // Prereqs: install the "Python Debugger" (ms-python.debugpy) extension and
   // have a `.env` file with the Postgres passwords (copy .env.example).
-  //
-  // Press F5: the "debug-up" task starts the medicoder container under debugpy
-  // (waiting for attach), then this config attaches to it.
   "version": "0.2.0",
   "configurations": [
     {
       "name": "Python: Attach to medicoder container",
       "type": "debugpy",
       "request": "attach",
-      "preLaunchTask": "debug-up",
-      "postDebugTask": "debug-down",
       "connect": {
         "host": "127.0.0.1",
         "port": 5678
