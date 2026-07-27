@@ -12,7 +12,14 @@
 #                        -f docker/docker-compose.gpu.yml --profile gpu-nvidia up
 #
 # Default stack stays env-only (cloud / host Ollama); this file is opt-in.
-# Pull a model once (into the shared named volume):
+#
+# ollama-init auto-pulls every `ollama`-kind entry in models.toml when the stack
+# comes up (profiles gpu-amd / gpu-nvidia). It polls http://ollama:11434 until
+# whichever GPU Ollama is ready, then POSTs /api/pull, skipping anything already
+# present. Fire-and-forget: nothing depends on it, so models arrive in parallel
+# with the medicoder app. kind=hf entries are not handled here (use the host
+# pull_models_before_build.py for HF GGUF imports).
+# For a one-off manual pull:
 #   docker compose -f docker-compose.yml -f docker/docker-compose.gpu.yml \
 #       --profile gpu-amd exec ollama-amd ollama pull llama3.2
 #   (use ollama-nvidia and --profile gpu-nvidia on the CUDA box)
@@ -27,7 +34,7 @@ services:
     volumes:
       - ollama-models:/root/.ollama
     ports:
-      - "11434:11434"
+      - "11433:11434"
     networks:
       default:
         aliases:
@@ -47,12 +54,27 @@ services:
     volumes:
       - ollama-models:/root/.ollama
     ports:
-      - "11434:11434"
+      - "11433:11434"
     networks:
       default:
         aliases:
           - ollama
     restart: unless-stopped
+
+  # One-shot sidecar: auto-pulls every `ollama`-kind entry in models.toml into
+  # the running Ollama when the stack comes up. Stdlib-only script (no pip
+  # installs); polls http://ollama:11434 so it works under either GPU profile
+  # without a depends_on. Fire-and-forget (nothing depends on it).
+  ollama-init:
+    image: python:3.13-slim
+    profiles: ["gpu-amd", "gpu-nvidia"]
+    volumes:
+      - ./models.toml:/models.toml:ro
+      - ./docker/program/pull_models.py:/pull_models.py:ro
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11433
+    command: ["python", "/pull_models.py"]
+    restart: "no"
 
   # Whenever this overlay is loaded, repoint LiteLLM's alias at the local
   # Ollama (whichever GPU service is active via its profile). These env vars
@@ -60,7 +82,7 @@ services:
   litellm:
     environment:
       LLM_UPSTREAM_MODEL: ollama/${OLLAMA_MODEL:-llama3.2}
-      LLM_UPSTREAM_API_BASE: http://ollama:11434
+      LLM_UPSTREAM_API_BASE: http://ollama:11433
       LLM_UPSTREAM_API_KEY: dummy
 
 volumes:

@@ -84,8 +84,15 @@ stack stays env-only; the overlay is opt-in.
 | AMD (ROCm) | `docker compose -f docker-compose.yml -f docker/docker-compose.gpu.yml --profile gpu-amd up` |
 | NVIDIA (CUDA) | `docker compose -f docker-compose.yml -f docker/docker-compose.gpu.yml --profile gpu-nvidia up` |
 
-Pull the model once (into the shared `ollama-models` volume) — match the service
-name to the profile:
+Models listed as `kind = "ollama"` in `models.toml` **auto-pull** when the stack
+comes up: an `ollama-init` sidecar (profile-gated, stdlib-only) polls
+`http://ollama:11434` until the GPU Ollama is ready, then `POST /api/pull`s each
+entry, skipping any already present. It's fire-and-forget — nothing depends on
+it, so models arrive in parallel with the app. (`kind = "hf"` GGUF imports are
+not handled by the sidecar; use `pull_models_before_build.py` for those.)
+
+For a one-off manual pull (into the shared `ollama-models` volume), match the
+service name to the profile:
 
 ```bash
 docker compose -f docker-compose.yml -f docker/docker-compose.gpu.yml \
@@ -225,6 +232,7 @@ docker/docker-compose.debug.yml  VSCode debugpy attach override (live source mou
 docker/docker-compose.gpu.yml  optional in-container GPU Ollama (AMD/ROCm + NVIDIA/CUDA profiles)
 docker/program/entrypoint.sh   runs loader, then the app command
 docker/program/debug.sh        debugpy entrypoint used by the debug overlay
+docker/program/pull_models.py  ollama-init sidecar: auto-pull models.toml on stack up
 docker/postgres/00-schema.sql  extension + icd10_codes table + indexes
 docker/postgres/01-roles.sh    medicoder (rw) + agent (ro) roles
 docker/postgres/02-litellm.sh  litellm role + audit database
