@@ -32,6 +32,21 @@ _LLM_TIMEOUT = 120.0
 # (omit the -d body to use the default medical prompt)
 @router.post("/test/{model}", response_model=TestResponse)
 def test_model(model: str, body: TestRequest | None = None) -> TestResponse:
+    """Send a single prompt to a LiteLLM model alias and return its reply.
+
+    Args:
+        model: A LiteLLM alias from ``docker/litellm/config.yaml`` (e.g.
+            "ii-medical-q8", "qwen35-medical").
+        body: Optional request body carrying the prompt; ``None`` uses the
+            default medical prompt.
+
+    Returns:
+        The model's reply with the resolved prompt and elapsed wall-clock time.
+
+    Raises:
+        HTTPException: 404 if the alias is unknown to LiteLLM, 504 on timeout,
+            502 if the proxy is unreachable or returns no choices.
+    """
     prompt = body.prompt if body and body.prompt else DEFAULT_PROMPT
     base = os.environ.get("LLM_BASE_URL", "http://litellm:4000/v1").rstrip("/")
     payload = json.dumps(

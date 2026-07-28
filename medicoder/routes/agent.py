@@ -72,6 +72,20 @@ def echo(text: str) -> str:
 # so repeated calls don't pay that cost.
 @lru_cache(maxsize=8)
 def _build_agent(model: str):  # type: ignore[no-untyped-def]
+    """Build (and cache) a locked-down DeepAgent for a LiteLLM alias.
+
+    The agent is created via LangChain's ``openai:`` provider, so it honors the
+    ``OPENAI_BASE_URL`` / ``OPENAI_API_KEY`` env vars set on the container. Tool
+    surface is restricted to ``echo`` by the provider-level harness profile
+    registered at module import.
+
+    Args:
+        model: A LiteLLM alias (e.g. "ii-medical-q8"). Only tool-calling-capable
+            models are usable; "ii-medical-q8" is the one known to work.
+
+    Returns:
+        A compiled DeepAgent graph.
+    """
     return create_deep_agent(
         model=f"openai:{model}",
         tools=[echo],
@@ -85,6 +99,21 @@ def _build_agent(model: str):  # type: ignore[no-untyped-def]
 # (omit the -d body to use the default prompt, which exercises the tool)
 @router.post("/agent/{model}", response_model=TestResponse)
 def run_agent(model: str, body: TestRequest | None = None) -> TestResponse:
+    """Run a DeepAgent on a prompt and return its final reply.
+
+    Args:
+        model: A LiteLLM alias for a tool-calling-capable model (e.g.
+            "ii-medical-q8").
+        body: Optional request body carrying the prompt; ``None`` uses a default
+            prompt that exercises the ``echo`` tool.
+
+    Returns:
+        The agent's final answer with the resolved prompt and elapsed time.
+
+    Raises:
+        HTTPException: 500 if the agent cannot be built, 504 on timeout, 404 if
+            the alias is unknown, 502 on any other agent run failure.
+    """
     # Default prompt nudges the agent to actually invoke the echo tool.
     prompt = (
         body.prompt

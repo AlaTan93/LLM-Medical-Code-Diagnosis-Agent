@@ -39,6 +39,17 @@ COPY_SQL = (
 
 
 def _connect() -> psycopg.Connection:
+    """Open a Postgres connection using the libpq env vars.
+
+    Retries for up to ``PG_CONNECT_RETRIES`` attempts (default 30, 2s apart) to
+    tolerate the database still starting up.
+
+    Returns:
+        An open ``psycopg`` connection as the read/write ``medicoder`` role.
+
+    Raises:
+        RuntimeError: If no connection succeeds within the retry budget.
+    """
     kwargs = {
         "host": os.environ.get("PGHOST", "postgres"),
         "port": int(os.environ.get("PGPORT", "5432")),
@@ -59,6 +70,18 @@ def _connect() -> psycopg.Connection:
 
 
 def _read_frame(path: Path) -> pd.DataFrame:
+    """Parse the fixed-width ICD-10-CM order file into a clean DataFrame.
+
+    Column offsets come from :data:`COLSPECS`; string columns are stripped of
+    surrounding whitespace and rows missing an order number or code are dropped.
+
+    Args:
+        path: Path to ``icd10cm_order_YYYY.txt``.
+
+    Returns:
+        A DataFrame with columns ``order_number, code, code_type, short_desc,
+        long_desc``.
+    """
     df = pd.read_fwf(
         path,
         colspecs=COLSPECS,
@@ -73,6 +96,18 @@ def _read_frame(path: Path) -> pd.DataFrame:
 
 
 def load(path: Path, *, force: bool = False) -> int:
+    """Idempotently load the ICD-10-CM order file into Postgres via COPY.
+
+    If the target table already holds rows the load is skipped unless
+    ``force`` is set, in which case the table is truncated first.
+
+    Args:
+        path: Path to the fixed-width ICD-10-CM order file.
+        force: If True, truncate and reload even when rows already exist.
+
+    Returns:
+        The total row count of ``icd10_codes`` after loading (0 if skipped).
+    """
     print(f"[load_icd10] parsing {path} ...")
     df = _read_frame(path)
     print(f"[load_icd10] parsed {len(df)} rows")
@@ -107,6 +142,14 @@ def load(path: Path, *, force: bool = False) -> int:
 
 
 def main() -> int:
+    """CLI entry: load the ICD-10 file referenced by ``ICD10_FILE``.
+
+    ``LOAD_FORCE=1`` forces a reload. The path defaults to
+    ``icd10cm_order_2026.txt``.
+
+    Returns:
+        Process exit code (0 on success, 1 if the data file is missing).
+    """
     path = Path(os.environ.get("ICD10_FILE", "icd10cm_order_2026.txt"))
     force = os.environ.get("LOAD_FORCE", "").lower() in ("1", "true", "yes")
     if not path.exists():

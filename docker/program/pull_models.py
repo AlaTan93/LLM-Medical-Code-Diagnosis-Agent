@@ -33,6 +33,18 @@ POLL_TIMEOUT = float(os.environ.get("OLLAMA_INIT_TIMEOUT", "180"))
 # Config
 # --------------------------------------------------------------------------- #
 def load_models(path: Path) -> list[dict]:
+    """Read the ``[[model]]`` entries from a TOML config file.
+
+    Args:
+        path: Path to ``models.toml``. Need not exist (returns an empty list
+            with a notice if missing).
+
+    Returns:
+        A list of model entries, each minimally containing a ``name`` key.
+
+    Raises:
+        SystemExit: If an entry is missing its ``name`` field.
+    """
     if not path.is_file():
         print(f"pull_models: {path} not found; nothing to pull")
         return []
@@ -48,11 +60,30 @@ def load_models(path: Path) -> list[dict]:
 # Ollama client (stdlib urllib)
 # --------------------------------------------------------------------------- #
 def get_existing(base: str, timeout: float = 10.0) -> set[str]:
+    """List model names already registered in the running Ollama.
+
+    Args:
+        base: Ollama base URL (e.g. "http://ollama:11434").
+        timeout: Request timeout in seconds.
+
+    Returns:
+        The set of model names reported by ``GET /api/tags`` (lowercased by
+        Ollama).
+    """
     with urllib.request.urlopen(f"{base}/api/tags", timeout=timeout) as resp:
         return {m["name"] for m in json.load(resp).get("models", [])}
 
 
 def wait_for_ollama(base: str, deadline: float) -> None:
+    """Poll Ollama until it responds or the deadline passes.
+
+    Args:
+        base: Ollama base URL.
+        deadline: Absolute ``time.time()`` deadline (epoch seconds).
+
+    Raises:
+        SystemExit: If Ollama stays unreachable past the deadline.
+    """
     print(f"pull_models: waiting for Ollama at {base} ...")
     while time.time() < deadline:
         try:
@@ -67,6 +98,20 @@ def wait_for_ollama(base: str, deadline: float) -> None:
 
 
 def pull_one(base: str, name: str) -> None:
+    """Pull a single model into Ollama, streaming progress to stdout.
+
+    Reads the newline-delimited JSON status stream from ``POST /api/pull`` and
+    renders download percentages inline. Returns as soon as Ollama reports a
+    ``success`` status.
+
+    Args:
+        base: Ollama base URL.
+        name: The model tag to pull (e.g. "hf.co/.../model:Q8_0").
+
+    Raises:
+        RuntimeError: If Ollama reports an ``error`` in the stream, or the
+            stream ends without a ``success`` status.
+    """
     print(f"  pulling {name} ...")
     req = urllib.request.Request(
         f"{base}/api/pull",
@@ -108,6 +153,13 @@ def pull_one(base: str, name: str) -> None:
 
 
 def _progress(label: str, done: int, total: int) -> None:
+    """Render an inline ``done/total (pct%)`` progress line for a pull.
+
+    Args:
+        label: Status label from Ollama (e.g. "pulling manifest").
+        done: Bytes completed so far.
+        total: Total bytes expected.
+    """
     if total <= 0:
         return
     sys.stdout.write(f"\r    {label}: {done:,}/{total:,} ({done * 100 / total:5.1f}%)")
@@ -115,6 +167,7 @@ def _progress(label: str, done: int, total: int) -> None:
 
 
 def _progress_done() -> None:
+    """Clear the inline progress line written by :func:`_progress`."""
     sys.stdout.write("\r" + " " * 80 + "\r")
     sys.stdout.flush()
 
@@ -123,6 +176,14 @@ def _progress_done() -> None:
 # Main
 # --------------------------------------------------------------------------- #
 def main() -> int:
+    """CLI entry: pull every model listed in the config into Ollama.
+
+    Waits for Ollama, skips models already present, pulls the rest, then
+    re-checks ``/api/tags`` to confirm each reported success actually landed.
+
+    Returns:
+        Process exit code (0 if all pulls succeeded, 1 if any failed).
+    """
     parser = argparse.ArgumentParser(description="Auto-pull ollama models listed in a TOML file.")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="models.toml path")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="Ollama base URL")

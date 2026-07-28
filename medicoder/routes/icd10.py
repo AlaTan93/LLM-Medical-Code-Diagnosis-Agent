@@ -17,6 +17,15 @@ def list_codes(
     q: str = Query("", description="Filter codes by prefix (case-sensitive)."),
     limit: int = Query(50, ge=1, le=500),
 ) -> list[dict]:
+    """List ICD-10-CM codes, optionally filtered by a code prefix.
+
+    Args:
+        q: Case-sensitive code prefix filter (empty matches everything).
+        limit: Maximum number of rows to return (1-500).
+
+    Returns:
+        Matching code rows ordered by ``code``.
+    """
     with get_pool().connection() as conn:
         return conn.execute(
             f"SELECT {_COLS} FROM icd10_codes "
@@ -28,6 +37,17 @@ def list_codes(
 
 @router.get("/codes/{order_number}", response_model=ICD10Code)
 def get_code(order_number: int) -> dict:
+    """Fetch a single ICD-10-CM code by its order number.
+
+    Args:
+        order_number: The CMS-assigned order number (primary key).
+
+    Returns:
+        The matching code row.
+
+    Raises:
+        HTTPException: 404 if no row has the given order number.
+    """
     with get_pool().connection() as conn:
         row = conn.execute(
             f"SELECT {_COLS} FROM icd10_codes WHERE order_number = %s",

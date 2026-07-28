@@ -16,6 +16,11 @@ _pool: ConnectionPool | None = None
 
 
 def _configure(conn) -> None:
+    """Configure a freshly checked-out connection to return dict rows.
+
+    Args:
+        conn: A ``psycopg`` connection from the pool.
+    """
     conn.row_factory = dict_row
 
 

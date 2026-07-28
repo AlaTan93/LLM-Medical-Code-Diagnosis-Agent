@@ -19,6 +19,12 @@ from medicoder.routes import agent, icd10, llm
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    """Open the DB pool on startup and close it on shutdown.
+
+    Args:
+        app: The FastAPI application the lifespan is attached to (unused beyond
+            satisfying the lifespan protocol).
+    """
     init_pool()
     try:
         yield
@@ -31,6 +37,11 @@ app = FastAPI(title="medicoder-technical", lifespan=lifespan)
 
 @app.get("/health")
 def health() -> dict[str, str]:
+    """Liveness probe.
+
+    Returns:
+        A small JSON status map indicating the app is up.
+    """
     return {"status": "ok"}
 
 
