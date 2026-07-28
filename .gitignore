@@ -16,6 +16,7 @@ MLE (LLM) - Take Home Assignment.pdf
 
 # Data files
 .data
+prev_session.txt
 
 # Docker secrets + local model weights
 .env
