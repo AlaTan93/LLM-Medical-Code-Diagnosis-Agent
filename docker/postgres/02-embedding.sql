@@ -16,6 +16,9 @@ ALTER TABLE public.icd10_codes
 -- HNSW over all rows (billable + non-billable). Non-billable codes are
 -- pre-embedded so they are search-ready if they become billable in a future
 -- release. The /code search query filters to is_billable at query time.
+-- m=32 / ef_construction=128 for higher recall on 98k codes (defaults of 16/64
+-- miss obvious matches at the default ef_search=40). The /code route also sets
+-- hnsw.ef_search=200 per-query for additional safety.
 CREATE INDEX IF NOT EXISTS idx_icd10_codes_embedding
     ON public.icd10_codes USING hnsw (embedding vector_cosine_ops)
-    WITH (m = 16, ef_construction = 64);
+    WITH (m = 32, ef_construction = 128);

@@ -32,7 +32,6 @@ def list_codes(
             "WHERE starts_with(code, %s) ORDER BY code LIMIT %s",
             (q, limit),
         ).fetchall()  # type: ignore
-    # reason: code still works despite type mismatch
 
 
 @router.get("/codes/{order_number}", response_model=ICD10Code)
@@ -56,4 +55,3 @@ def get_code(order_number: int) -> dict:
     if row is None:
         raise HTTPException(status_code=404, detail="code not found")
     return row  # type: ignore
-    # reason: code still works despite type mismatch

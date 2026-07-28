@@ -101,7 +101,9 @@ def strip_thinking(text: str) -> str:
     """Remove ``<think>…</think>`` reasoning blocks from a model response.
 
     Strips complete think blocks; if a block is unclosed (truncated output),
-    everything from the opening ``<think>`` onward is removed.
+    everything from the opening ``<think>`` onward is removed.  Orphaned
+    ``</think>`` closing tags (left behind when Ollama strips opening tags)
+    are handled by keeping only the text after the last ``</think>``.
 
     Args:
         text: Raw model output that may contain think blocks.
@@ -112,4 +114,6 @@ def strip_thinking(text: str) -> str:
     cleaned = _THINK_RE.sub("", text)
     if "<think>" in cleaned:
         cleaned = cleaned.split("<think>")[0]
+    if "</think>" in cleaned:
+        cleaned = cleaned.rsplit("</think>", 1)[-1]
     return cleaned.strip()

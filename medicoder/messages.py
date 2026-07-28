@@ -1,8 +1,8 @@
 """Helpers for extracting data from LangGraph/LangChain message lists.
 
-Both agent routes (``/agent`` and ``/code``) need to pull structured data out of
-the message list returned by ``agent.invoke``.  Centralising that logic here
-removes route-to-route import coupling.
+The ``/agent`` route needs to pull structured data out of the message list
+returned by ``agent.invoke``.  Centralising that logic here keeps it out of
+the route module.
 """
 
 from __future__ import annotations

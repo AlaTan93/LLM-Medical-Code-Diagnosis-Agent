@@ -38,12 +38,12 @@ class TestRequest(BaseModel):
 
 
 class ToolResult(BaseModel):
-    """A single tool invocation captured from an agent run.
+    """A single step captured from a pipeline or agent run.
 
     Attributes:
-        tool: The name of the tool that was called (e.g. "get_flag").
-        args: The arguments the model passed to the tool.
-        result: The value the tool returned.
+        tool: The name of the tool or step (e.g. "diagnose", "get_flag").
+        args: The arguments passed to the step.
+        result: The value the step returned.
     """
 
     tool: str
@@ -73,7 +73,7 @@ class TestResponse(BaseModel):
 
 
 class CodeRequest(BaseModel):
-    """Request body for the coding orchestrator endpoint.
+    """Request body for the coding pipeline endpoint.
 
     Attributes:
         text: Clinical text or patient description to code.
@@ -103,13 +103,13 @@ class ICD10Match(BaseModel):
 
 
 class CodeResponse(BaseModel):
-    """Response from the coding orchestrator.
+    """Response from the coding pipeline.
 
     Attributes:
         diagnosis: The one-sentence diagnosis produced by the medical model.
         codes: Top matching billable ICD-10-CM codes (most similar first).
-        tool_results: Full tool-call trace (diagnose + search_icd10 invocations).
-        elapsed_s: Wall-clock seconds for the entire orchestration.
+        tool_results: Step-by-step trace (diagnose + search_icd10 invocations).
+        elapsed_s: Wall-clock seconds for the entire pipeline.
     """
 
     diagnosis: str

@@ -44,7 +44,7 @@ orchestrator, and embedding aliases are hardcoded to the in-container Ollama
 | Alias | Model | Notes |
 | ----- | ----- | ----- |
 | `A` | `${LLM_UPSTREAM_MODEL}` | Env-driven; any OpenAI-compatible endpoint |
-| `orchestrator` | `qwen2.5:7b` | Generalist tool-caller (drives `/code`) |
+| `orchestrator` | `qwen2.5:7b` | Generalist tool-caller (reserved for future agent features) |
 | `ii-medical-q8` | `II-Medical-8B-1706-GGUF:Q8_0` | Medical diagnosis generation |
 | `deepseek-r1-medical-cot` | `DeepSeek-R1-Medical-COT:Q4_K_M` | Medical (thinking model) |
 | `qwen35-medical` | `qwen35-9b-medical:Q4_K_M` | Medical |
@@ -215,21 +215,22 @@ may make several LLM round-trips, so cold-start calls can be slower than
 
 ## Coding pipeline (POST /code)
 
-The main endpoint: a generalist orchestrator agent (`orchestrator` alias →
-`qwen2.5:7b`) drives a two-step pipeline to produce billable ICD-10-CM codes
-from clinical text.
+The main endpoint: a deterministic two-step pipeline that produces billable
+ICD-10-CM codes from clinical text. No LLM orchestrator is needed — the steps
+always run in fixed order, which is more reliable than asking a generalist
+model to chain tool calls.
 
-1. **`diagnose(text)`** — the orchestrator forwards the clinical text *verbatim*
-   to a medical model (default `ii-medical-q8`) via a plain chat completion (no
-   tools required). Returns a one-sentence diagnosis. Thinking blocks
-   (`<think>…</think>`) are stripped automatically.
-2. **`search_icd10(query, k=3)`** — the orchestrator passes the diagnosis to a
-   pgvector cosine-similarity search over all billable ICD-10 codes, returning
-   the top-k matches with similarity scores.
+1. **Diagnose** — the clinical text is forwarded to a medical model (default
+   `ii-medical-q8`) via a plain chat completion (no tools required). The model
+   returns a one-sentence diagnosis. Thinking blocks (`<think>…</think>` and
+   orphaned `</think>` tags) are stripped automatically.
+2. **Search** — the diagnosis is embedded with bge-m3 and a pgvector
+   cosine-similarity search returns the top-k billable ICD-10 codes. The HNSW
+   index uses `m=32, ef_construction=128` and the query sets
+   `hnsw.ef_search=200` for high recall over 74k billable codes.
 
 The medical models are used only as text generators — they never need to call
-tools. The orchestrator (a strong generalist tool-caller) handles all tool
-dispatch.
+tools.
 
 ```bash
 curl -X POST http://localhost:8000/code \
@@ -248,7 +249,7 @@ curl -X POST http://localhost:8000/code \
 
 Returns `{"diagnosis","codes","tool_results","elapsed_s"}` where `codes` is the
 ranked list of billable ICD-10-CM matches (`code`, `short_desc`, `long_desc`,
-`similarity`).
+`similarity`), and `tool_results` records each step's input and output.
 
 ## Data loading
 
@@ -370,7 +371,7 @@ medicoder/db/pool.py             psycopg connection pool (lifespan-managed)
 medicoder/routes/icd10.py        /codes endpoints
 medicoder/routes/llm.py          POST /test/{model} — call a LiteLLM alias
 medicoder/routes/agent.py        POST /agent/{model} — langgraph ReAct agent + echo/get_flag tools
-medicoder/routes/code.py         POST /code — orchestrator pipeline (diagnose + search_icd10)
+medicoder/routes/code.py         POST /code — deterministic pipeline (diagnose + search_icd10)
 main.py                          FastAPI app + lifespan + router wiring
 models.toml                      registry models for the ollama-init sidecar
 .vscode/{launch,tasks,extensions}.json  VSCode container debugging
