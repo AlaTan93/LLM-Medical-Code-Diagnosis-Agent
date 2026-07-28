@@ -20,7 +20,4 @@ prev_session.txt
 
 # Docker secrets + local model weights
 .env
-models/*.gguf
-models/*.bin
-models/.cache/
 .vscode
