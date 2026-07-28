@@ -26,9 +26,9 @@ model_list:
   # Hardcoded to http://ollama:11434 — dormant in cloud mode (errors only if
   # called). LiteLLM splits the provider on the first "/", so e.g.
   # ollama/hf.co/...:Q8_0 -> provider=ollama, model=hf.co/...:Q8_0.
-  - model_name: medical-grpo
+  - model_name: deepseek-r1-medical-cot
     litellm_params:
-      model: ollama/lastmass/Qwen3_Medical_GRPO
+      model: ollama/rwibawa/DeepSeek-R1-Medical-COT:Q4_K_M
       api_base: http://ollama:11434
       api_key: dummy
   - model_name: ii-medical-q8
@@ -48,5 +48,3 @@ litellm_settings:
 general_settings:
   # Postgres-backed audit store (DATABASE_URL is set on the litellm container).
   database_url: os.environ/DATABASE_URL
-  # Uncomment to require auth; the app must then send Authorization: Bearer ...
-  # master_key: os.environ/LITELLM_MASTER_KEY

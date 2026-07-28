@@ -7,7 +7,7 @@
 # both the registry tag and the local Ollama name. Re-runs are idempotent.
 
 [[model]]
-name = "lastmass/Qwen3_Medical_GRPO"
+name = "hf.co/rwibawa/DeepSeek-R1-Medical-COT/resolve/main/llama-3-8b-chat-doctor:Q4_K_M"
 
 [[model]]
 name = "hf.co/Intelligent-Internet/II-Medical-8B-1706-GGUF:Q8_0"

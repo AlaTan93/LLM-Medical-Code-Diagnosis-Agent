@@ -36,8 +36,11 @@ docker compose up --build
 
 ## Configure the upstream LLM
 
-LiteLLM routes the alias your app calls (`LLM_MODEL`, default `A`) to the
-upstream LLM configured by three `.env` variables on the `litellm` container:
+LiteLLM routes a model alias your app calls (e.g. `ii-medical-q8`,
+`medical-grpo`, `qwen35-medical`, or the env-driven `A`) to an upstream LLM.
+Alias `A` is configured by three `.env` variables on the `litellm` container; the
+medical aliases are hardcoded to the in-container Ollama (see
+`docker/litellm/config.yaml`):
 
 | Variable                | Example                       | Notes                                                |
 | ----------------------- | ----------------------------- | ---------------------------------------------------- |
@@ -247,6 +250,11 @@ docker/postgres/02-litellm.sh  litellm role + audit database
 docker/postgres/02-embedding.sql.example  optional pgvector column/index
 docker/litellm/config.yaml     LiteLLM alias -> upstream routing + DB logging
 medicoder/db/load_icd10.py     fixed-width -> COPY loader
+medicoder/db/pool.py           psycopg connection pool (lifespan-managed)
+medicoder/schemas.py           Pydantic models (ICD10Code, TestRequest/Response)
+medicoder/routes/icd10.py      /codes endpoints
+medicoder/routes/llm.py        POST /test/{model} — call a LiteLLM alias
+main.py                        FastAPI app + lifespan + router wiring
 models.toml                    registry models for the ollama-init sidecar
 .vscode/{launch,tasks,extensions}.json  VSCode container debugging
 .env.example                   all configuration

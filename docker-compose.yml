@@ -47,8 +47,6 @@ services:
       LLM_UPSTREAM_MODEL: ${LLM_UPSTREAM_MODEL:?set LLM_UPSTREAM_MODEL in .env}
       LLM_UPSTREAM_API_BASE: ${LLM_UPSTREAM_API_BASE:?set LLM_UPSTREAM_API_BASE in .env}
       LLM_UPSTREAM_API_KEY: ${LLM_UPSTREAM_API_KEY:?set LLM_UPSTREAM_API_KEY in .env}
-      # Uncomment + the master_key line in config.yaml to require auth on the proxy.
-      # LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
     command:
       - "--config"
       - "/app/config.yaml"
@@ -91,8 +89,11 @@ services:
       ICD10_FILE: /app/icd10cm_order_2026.txt
       # Points at the local LiteLLM proxy (alias -> upstream LLM).
       LLM_BASE_URL: ${LLM_BASE_URL:-http://litellm:4000/v1}
-      # Model alias defined in docker/litellm/config.yaml (e.g. "A").
-      LLM_MODEL: ${LLM_MODEL:-A}
+      # DeepAgent models are reached via LangChain's `openai:` provider, which
+      # reads OPENAI_BASE_URL / OPENAI_API_KEY. LiteLLM enforces no key, so a
+      # dummy value is fine; base URL mirrors LLM_BASE_URL.
+      OPENAI_BASE_URL: ${LLM_BASE_URL:-http://litellm:4000/v1}
+      OPENAI_API_KEY: dummy
     ports:
       - "8000:8000"
     volumes:

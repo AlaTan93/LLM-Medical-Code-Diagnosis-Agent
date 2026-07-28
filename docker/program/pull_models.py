@@ -25,7 +25,7 @@ import urllib.request
 from pathlib import Path
 
 DEFAULT_CONFIG = Path(os.environ.get("MODELS_CONFIG", "/models.toml"))
-DEFAULT_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11433")
+DEFAULT_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
 POLL_TIMEOUT = float(os.environ.get("OLLAMA_INIT_TIMEOUT", "180"))
 
 
