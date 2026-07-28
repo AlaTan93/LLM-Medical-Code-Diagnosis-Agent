@@ -7,9 +7,12 @@
 #   self-deployed server (vLLM, TGI), or an Ollama you run on the host
 #   (LLM_UPSTREAM_API_BASE=http://host.docker.internal:11434) without editing
 #   this file.
-# - Writes a full audit (request messages + response, tokens, cost, latency) to
-#   Postgres (LiteLLM_SpendLogs table) via DATABASE_URL. Message logging is ON
-#   by default; do NOT set turn_off_message_logging if you want the payloads.
+# - LiteLLM_SpendLogs (via DATABASE_URL) records per-call tokens / cost / latency
+#   — cost is $0 for the local Ollama models, so that table isn't useful for
+#   inspecting prompts. Instead, the custom callback below (see
+#   docker/litellm/log_callback.py, wired via litellm_settings.callbacks) writes
+#   each call's prompt, thinking, output, and tool calls to a dedicated
+#   llm_call_log table (queryable as the litellm DB).
 
 model_list:
   # The app calls model "A"; LiteLLM forwards to LLM_UPSTREAM_MODEL at
@@ -44,6 +47,8 @@ model_list:
 
 litellm_settings:
   drop_params: true
+  # Custom success callback → llm_call_log (see docker/litellm/log_callback.py).
+  callbacks: log_callback.llm_call_logger
 
 general_settings:
   # Postgres-backed audit store (DATABASE_URL is set on the litellm container).

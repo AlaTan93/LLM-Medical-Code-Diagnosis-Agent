@@ -37,7 +37,7 @@ docker compose up --build
 ## Configure the upstream LLM
 
 LiteLLM routes a model alias your app calls (e.g. `ii-medical-q8`,
-`medical-grpo`, `qwen35-medical`, or the env-driven `A`) to an upstream LLM.
+`deepseek-r1-medical-cot`, `qwen35-medical`, or the env-driven `A`) to an upstream LLM.
 Alias `A` is configured by three `.env` variables on the `litellm` container; the
 medical aliases are hardcoded to the in-container Ollama (see
 `docker/litellm/config.yaml`):
@@ -65,12 +65,25 @@ point at the in-container Ollama. Your `.env` upstream values are **ignored**
 in that mode; they apply only in the default stack (and the `debug-up-cloud`
 task).
 
-**Audit log:** every LLM call and its response are written to the `LiteLLM_SpendLogs`
-table in the `litellm` database. Query it:
+**LLM call log:** a custom LiteLLM callback (`docker/litellm/log_callback.py`,
+wired via `litellm_settings.callbacks`) writes every call to the `llm_call_log`
+table in the `litellm` database — the prompt (`messages`), any reasoning
+(`thinking`, i.e. `reasoning_content`/`<think>`), the reply (`output`), any
+`tool_calls`, and token usage (`prompt_tokens`/`completion_tokens`/`total_tokens`).
+(LiteLLM's built-in `LiteLLM_SpendLogs` only tracks tokens/cost, which is `$0`
+for the local Ollama models, so it's not useful for inspecting prompts.) Recent
+calls:
 
 ```bash
 docker compose exec postgres psql -U postgres -d litellm \
-  -c "SELECT request_id, model, prompt_tokens, completion_tokens, startTime, endTime FROM \"LiteLLM_SpendLogs\" ORDER BY startTime DESC LIMIT 10;"
+  -c 'SELECT id, model, call_type, prompt_tokens, completion_tokens, substring(thinking,1,30) AS thinking, (tool_calls IS NOT NULL) AS tools, latency_ms FROM llm_call_log ORDER BY id DESC LIMIT 10;'
+```
+
+Inspect the prompt / thinking / output / tool calls of the most recent call:
+
+```bash
+docker compose exec postgres psql -U postgres -d litellm \
+  -c 'SELECT model, substring(messages::text,1,200) AS prompt, substring(thinking,1,150) AS thinking, substring(output,1,150) AS output, substring(tool_calls::text,1,150) AS tools FROM llm_call_log ORDER BY id DESC LIMIT 1;'
 ```
 
 ## Optional: local GPU LLM (in-container Ollama)
@@ -115,10 +128,13 @@ list the Ollama-registry tags you want available:
 
 ```toml
 [[model]]
-name = "lastmass/Qwen3_Medical_GRPO"
+name = "hf.co/rwibawa/DeepSeek-R1-Medical-COT/resolve/main/llama-3-8b-chat-doctor:Q4_K_M"
 
 [[model]]
-name = "llama3.2"
+name = "hf.co/Intelligent-Internet/II-Medical-8B-1706-GGUF:Q8_0"
+
+[[model]]
+name = "hf.co/qaootkcx/qwen35-9b-medical:Q4_K_M"
 ```
 
 Each entry is a registry tag (also the local Ollama name). Re-runs are
@@ -135,7 +151,7 @@ docker compose -f docker-compose.yml -f docker/docker-compose.gpu.yml \
 LiteLLM has **no host port** (in-network only), so the models can't be reached
 directly from the host. The app exposes a temporary testing endpoint that calls
 LiteLLM internally. `model` is a LiteLLM alias from `docker/litellm/config.yaml`
-(e.g. `ii-medical-q8`, `medical-grpo`, `qwen35-medical`, `A`):
+(e.g. `ii-medical-q8`, `deepseek-r1-medical-cot`, `qwen35-medical`, `A`):
 
 ```bash
 # default medical prompt
@@ -279,6 +295,7 @@ docker/postgres/01-roles.sh    medicoder (rw) + agent (ro) roles
 docker/postgres/02-litellm.sh  litellm role + audit database
 docker/postgres/02-embedding.sql.example  optional pgvector column/index
 docker/litellm/config.yaml     LiteLLM alias -> upstream routing + DB logging
+docker/litellm/log_callback.py custom callback -> llm_call_log (prompts/thinking/output/tools)
 medicoder/db/load_icd10.py     fixed-width -> COPY loader
 medicoder/db/pool.py           psycopg connection pool (lifespan-managed)
 medicoder/schemas.py           Pydantic models (ICD10Code; TestRequest/Response shared by /test and /agent)
