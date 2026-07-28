@@ -45,6 +45,21 @@ model_list:
       api_base: http://ollama:11434
       api_key: dummy
 
+  # Embedding model for ICD-10 vector similarity search (1024-dim bge-m3).
+  # The app calls POST /v1/embeddings {"model": "embed", "input": [...]}.
+  - model_name: embed
+    litellm_params:
+      model: ollama/bge-m3
+      api_base: http://ollama:11434
+      api_key: dummy
+
+  # Generalist orchestrator for the /code pipeline (strong tool-caller).
+  - model_name: orchestrator
+    litellm_params:
+      model: ollama/qwen2.5:7b
+      api_base: http://ollama:11434
+      api_key: dummy
+
 litellm_settings:
   drop_params: true
   # Custom success callback → llm_call_log (see docker/litellm/log_callback.py).

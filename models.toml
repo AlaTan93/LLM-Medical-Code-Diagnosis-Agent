@@ -15,7 +15,11 @@ name = "hf.co/Intelligent-Internet/II-Medical-8B-1706-GGUF:Q8_0"
 [[model]]
 name = "hf.co/qaootkcx/qwen35-9b-medical:Q4_K_M"
 
-# Add more registry models, e.g.:
-# [[model]]
-# name = "llama3.2"
+# Embedding model for ICD-10 vector similarity search (1024-dim, pgvector).
+[[model]]
+name = "bge-m3"
+
+# Generalist orchestrator for the /code pipeline (strong tool-caller).
+[[model]]
+name = "qwen2.5:7b"
 

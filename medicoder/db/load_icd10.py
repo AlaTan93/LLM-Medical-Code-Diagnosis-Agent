@@ -10,22 +10,20 @@ release:
     (16, 76) short description (60 chars)
     (77, ..) long description (variable width)
 
-Connection parameters come from the standard libpq environment variables
-(``PGHOST``, ``PGPORT``, ``PGDATABASE``, ``PGUSER``, ``PGPASSWORD``). The loader
-connects as the read/write ``medicoder`` role and uses the binary COPY protocol
-for speed. It is safe to re-run: if the table already holds rows it exits early
-unless ``LOAD_FORCE=1``.
+The loader connects via :func:`medicoder.db.connect.connect` (shared with
+``embed_icd10.py``) and uses the binary COPY protocol for speed. It is safe to
+re-run: if the table already holds rows it exits early unless ``LOAD_FORCE=1``.
 """
 
 from __future__ import annotations
 
 import os
 import sys
-import time
 from pathlib import Path
 
 import pandas as pd
-import psycopg
+
+from medicoder.db.connect import connect
 
 COLSPECS = [(0, 5), (6, 13), (14, 15), (16, 76), (77, None)]
 COLUMNS = ["order_number", "code", "code_type", "short_desc", "long_desc"]
@@ -36,37 +34,6 @@ COPY_SQL = (
     "COPY icd10_codes (order_number, code, code_type, short_desc, long_desc) "
     "FROM STDIN"
 )
-
-
-def _connect() -> psycopg.Connection:
-    """Open a Postgres connection using the libpq env vars.
-
-    Retries for up to ``PG_CONNECT_RETRIES`` attempts (default 30, 2s apart) to
-    tolerate the database still starting up.
-
-    Returns:
-        An open ``psycopg`` connection as the read/write ``medicoder`` role.
-
-    Raises:
-        RuntimeError: If no connection succeeds within the retry budget.
-    """
-    kwargs = {
-        "host": os.environ.get("PGHOST", "postgres"),
-        "port": int(os.environ.get("PGPORT", "5432")),
-        "dbname": os.environ.get("PGDATABASE", "medicoder"),
-        "user": os.environ.get("PGUSER", "medicoder"),
-        "password": os.environ.get("PGPASSWORD", ""),
-    }
-    retries = int(os.environ.get("PG_CONNECT_RETRIES", "30"))
-    last_err: Exception | None = None
-    for _ in range(retries):
-        try:
-            return psycopg.connect(connect_timeout=5, **kwargs)
-        except psycopg.OperationalError as exc:
-            last_err = exc
-            print(f"[load_icd10] waiting for postgres: {exc}", file=sys.stderr)
-            time.sleep(2)
-    raise RuntimeError(f"could not connect to postgres: {last_err}")
 
 
 def _read_frame(path: Path) -> pd.DataFrame:
@@ -112,7 +79,7 @@ def load(path: Path, *, force: bool = False) -> int:
     df = _read_frame(path)
     print(f"[load_icd10] parsed {len(df)} rows")
 
-    with _connect() as conn, conn.cursor() as cur:
+    with connect() as conn, conn.cursor() as cur:
         cur.execute(COUNT_SQL)
         existing = cur.fetchone()[0]
         if existing and not force:

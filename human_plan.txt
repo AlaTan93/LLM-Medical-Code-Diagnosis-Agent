@@ -3,6 +3,8 @@ Notes:
 There are 98186 case codes. It is possible that in the future, non-billable codes may become billable, or vice-versa, so keeping all records is important. 
 However, only billable rows should be used for the purpose of text embedding.
 
+deepseek-r1-medical-cot is the only model capable of tool-calling.
+
 Goal is to complete project and testing by Thursday.
 
 Option 1:

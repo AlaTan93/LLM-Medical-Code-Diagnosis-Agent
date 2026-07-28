@@ -14,7 +14,7 @@ from typing import AsyncGenerator
 from fastapi import FastAPI
 
 from medicoder.db.pool import close_pool, init_pool
-from medicoder.routes import agent, icd10, llm
+from medicoder.routes import agent, code, icd10, llm
 
 
 @asynccontextmanager
@@ -48,6 +48,7 @@ def health() -> dict[str, str]:
 app.include_router(icd10.router)
 app.include_router(llm.router)
 app.include_router(agent.router)
+app.include_router(code.router)
 
 
 if __name__ == "__main__":
