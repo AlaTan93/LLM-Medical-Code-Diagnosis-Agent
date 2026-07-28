@@ -34,19 +34,19 @@ router = APIRouter()
 register_harness_profile(
     "openai",
     HarnessProfile(
-        excluded_tools=frozenset(
-            {
-                "ls",
-                "read_file",
-                "write_file",
-                "edit_file",
-                "delete",
-                "glob",
-                "grep",
-                "execute",
-                "write_todos",
-            }
-        ),
+        # excluded_tools=frozenset(
+        #     {
+        #         "ls",
+        #         "read_file",
+        #         "write_file",
+        #         "edit_file",
+        #         "delete",
+        #         "glob",
+        #         "grep",
+        #         "execute",
+        #         "write_todos",
+        #     }
+        # ),
         general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
     ),
 )
@@ -66,6 +66,13 @@ _SYSTEM_PROMPT = "You are a medical coding assistant. Use the available tools wh
 def echo(text: str) -> str:
     """Echo back the provided text verbatim."""
     return text
+
+def get_flag(text: str) -> str:
+    """Gives the flag if the argument is 'hello'."""
+    if text == "hello":
+        return "{FLAG}_6cfc6bd484e8ff8301657eb4447f9eee71599bdb07ac98f4cf8e4d5d2ec07ccf"
+    else:
+        return "nope"
 
 
 # Building a DeepAgent compiles a LangGraph; cache one instance per model alias
@@ -88,7 +95,7 @@ def _build_agent(model: str):  # type: ignore[no-untyped-def]
     """
     return create_deep_agent(
         model=f"openai:{model}",
-        tools=[echo],
+        tools=[echo, get_flag],
         system_prompt=_SYSTEM_PROMPT,
     )
 

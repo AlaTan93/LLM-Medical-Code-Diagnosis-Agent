@@ -31,7 +31,7 @@ model_list:
   # ollama/hf.co/...:Q8_0 -> provider=ollama, model=hf.co/...:Q8_0.
   - model_name: deepseek-r1-medical-cot
     litellm_params:
-      model: ollama/rwibawa/DeepSeek-R1-Medical-COT:Q4_K_M
+      model: ollama/hf.co/rwibawa/DeepSeek-R1-Medical-COT:Q4_K_M
       api_base: http://ollama:11434
       api_key: dummy
   - model_name: ii-medical-q8
