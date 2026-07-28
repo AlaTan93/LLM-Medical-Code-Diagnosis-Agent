@@ -7,7 +7,7 @@ ICD-10-CM medical coding prototype. The default stack runs as 3 containers
 | Service    | Image                                 | Role                                                                  |
 | ---------- | ------------------------------------- | -------------------------------------------------------------------- |
 | `postgres` | `pgvector/pgvector:pg16`              | Stores `icd10_codes`; `medicoder` (rw) + `agent` (ro) roles; LiteLLM audit DB |
-| `medicoder`| built from `Dockerfile`               | App + idempotent ICD-10 loader                                       |
+| `medicoder`| built from `Dockerfile`               | App + idempotent ICD-10 loader + `/agent` endpoint                  |
 | `litellm`  | `ghcr.io/berriai/litellm:main-stable` | Local proxy: routes the model alias to your upstream LLM + audits every call/response to Postgres |
 
 `medicoder` always points its OpenAI-compatible client at the local LiteLLM
@@ -151,6 +151,36 @@ Returns `{"model","prompt","response","elapsed_s"}`. Unknown alias → `404`;
 LiteLLM unreachable → `502`; model-load timeout → `504`. (First call per model
 loads it into VRAM, ~10–60s.)
 
+## Agentic LLM calls (POST /agent/{model})
+
+Like `/test/{model}`, but runs the prompt through a [`deepagents`](https://pypi.org/project/deepagents/)
+agent (LangChain/LangGraph) instead of a single completion, so the model can
+call tools. The model is reached via LangChain's `openai:` provider, which reads
+`OPENAI_BASE_URL` / `OPENAI_API_KEY` — both set automatically on the `medicoder`
+container (derived from `LLM_BASE_URL` + a dummy key; LiteLLM enforces no key).
+
+One placeholder tool is wired up: **`echo(text)`**. The harness's bundled
+filesystem / subagent / todos tools are hidden, so `echo` is the only tool the
+model can call. Add more by passing them to `create_deep_agent` in
+`medicoder/routes/agent.py`.
+
+> Use a **tool-calling-capable** model — e.g. `ii-medical-q8`, or a cloud model
+> via alias `A` (`gpt-4o-mini`, …).
+
+```bash
+# default prompt (exercises echo)
+curl -X POST http://localhost:8000/agent/ii-medical-q8
+
+# custom prompt
+curl -X POST http://localhost:8000/agent/ii-medical-q8 \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"Use the echo tool to repeat: hello"}'
+```
+
+Returns `{"model","prompt","response","elapsed_s"}` (same shape as `/test`). The
+agent may make several LLM round-trips, so cold-start calls can be slower than
+`/test`.
+
 ## What the loader does
 
 On every boot `medicoder` runs `medicoder.db.load_icd10`, which parses the
@@ -251,9 +281,10 @@ docker/postgres/02-embedding.sql.example  optional pgvector column/index
 docker/litellm/config.yaml     LiteLLM alias -> upstream routing + DB logging
 medicoder/db/load_icd10.py     fixed-width -> COPY loader
 medicoder/db/pool.py           psycopg connection pool (lifespan-managed)
-medicoder/schemas.py           Pydantic models (ICD10Code, TestRequest/Response)
+medicoder/schemas.py           Pydantic models (ICD10Code; TestRequest/Response shared by /test and /agent)
 medicoder/routes/icd10.py      /codes endpoints
 medicoder/routes/llm.py        POST /test/{model} — call a LiteLLM alias
+medicoder/routes/agent.py      POST /agent/{model} — deepagents agent + echo tool
 main.py                        FastAPI app + lifespan + router wiring
 models.toml                    registry models for the ollama-init sidecar
 .vscode/{launch,tasks,extensions}.json  VSCode container debugging
