@@ -78,6 +78,7 @@ class CodeRequest(BaseModel):
 
     text: str
     medical_model: str = "ii-medical-q8"
+    k: int = 3
 
 
 class ICD10Match(BaseModel):
@@ -101,13 +102,13 @@ class CodeResponse(BaseModel):
     """Response from the coding pipeline.
 
     Attributes:
-        diagnosis: The one-sentence diagnosis produced by the medical model.
-        codes: Top matching billable ICD-10-CM codes (most similar first).
+        diagnoses: The diagnoses produced by the medical model (1-10 entries).
+        codes: Matching billable ICD-10-CM codes (most similar first).
         tool_results: Step-by-step trace (diagnose + search_icd10 invocations).
         elapsed_s: Wall-clock seconds for the entire pipeline.
     """
 
-    diagnosis: str
+    diagnoses: list[str]
     codes: list[ICD10Match]
     tool_results: list[ToolResult] | None = None
     elapsed_s: float
@@ -118,22 +119,24 @@ class DiagnoseRequest(BaseModel):
 
     Attributes:
         text: Clinical text or patient description to diagnose.
+        k: Maximum ICD-10 codes to return per diagnosis (default 3).
     """
 
     text: str
+    k: int = 3
 
 
 class DiagnosisResult(BaseModel):
-    """A single model's diagnosis and its matching ICD-10 codes.
+    """A single model's diagnoses and their matching ICD-10 codes.
 
     Attributes:
-        model: The LiteLLM alias that produced the diagnosis.
-        diagnosis: The one-sentence diagnosis, or empty if the model failed.
-        codes: Top matching billable ICD-10-CM codes (most similar first).
+        model: The LiteLLM alias that produced the diagnoses.
+        diagnoses: The diagnoses produced by the model (1-10 entries).
+        codes: Matching billable ICD-10-CM codes (most similar first).
     """
 
     model: str
-    diagnosis: str
+    diagnoses: list[str]
     codes: list[ICD10Match]
 
 

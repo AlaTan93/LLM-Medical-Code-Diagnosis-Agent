@@ -7,13 +7,14 @@
 # both the registry tag and the local Ollama name. Re-runs are idempotent.
 
 [[model]]
-name = "hf.co/rwibawa/DeepSeek-R1-Medical-COT:Q4_K_M"
+name = "hf.co/mradermacher/Gemma-4-Medical-ICD10-i1-GGUF:Q6_K"
+#name = "hf.co/rwibawa/DeepSeek-R1-Medical-COT:Q4_K_M"
 
 [[model]]
 name = "hf.co/Intelligent-Internet/II-Medical-8B-1706-GGUF:Q8_0"
 
-[[model]]
-name = "hf.co/qaootkcx/qwen35-9b-medical:Q4_K_M"
+#[[model]]
+#name = "hf.co/qaootkcx/qwen35-9b-medical:Q4_K_M"
 
 # Embedding model for ICD-10 vector similarity search (1024-dim, pgvector).
 [[model]]

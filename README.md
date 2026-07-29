@@ -180,10 +180,14 @@ model to chain tool calls.
 
 1. **Diagnose** — the clinical text is forwarded to a medical model (default
    `ii-medical-q8`) via a plain chat completion (no tools required). The model
-   returns a one-sentence diagnosis. Thinking blocks (`<think>…</think>` and
-   orphaned `</think>` tags) are stripped automatically.
-2. **Search** — the diagnosis is embedded with bge-m3 and a pgvector
-   cosine-similarity search returns the top-k billable ICD-10 codes. The HNSW
+   returns 1–10 independent diagnoses (one per line). Thinking blocks
+   (`<think>...</think>` and orphaned `</think>` tags) are stripped
+   automatically; `\boxed{...}` wrappers and leading numbers/bullets are
+   removed during parsing.
+2. **Search** — each diagnosis is embedded with bge-m3 (batched in one API
+   call) and a pgvector cosine-similarity search returns the top-k billable
+   ICD-10 codes per diagnosis (default k=3, configurable). Results are
+   deduplicated by code (keeping the highest similarity) and sorted. The HNSW
    index uses `m=32, ef_construction=128` and the query sets
    `hnsw.ef_search=200` for high recall over 74k billable codes.
 
@@ -196,23 +200,29 @@ curl -X POST http://localhost:8000/code \
   -d '{"text":"Patient has type 2 diabetes mellitus without complications"}'
 ```
 
-Optional `medical_model` field overrides the diagnosis model (default
-`ii-medical-q8`):
+Optional fields override the defaults:
+
+- `medical_model` — diagnosis model (default `ii-medical-q8`)
+- `k` — ICD-10 codes per diagnosis (default `3`)
 
 ```bash
 curl -X POST http://localhost:8000/code \
   -H 'Content-Type: application/json' \
-  -d '{"text":"...","medical_model":"deepseek-r1-medical-cot"}'
+  -d '{"text":"...","medical_model":"deepseek-r1-medical-cot","k":5}'
 ```
 
-Returns `{"diagnosis","codes","tool_results","elapsed_s"}` where `codes` is the
-ranked list of billable ICD-10-CM matches (`code`, `short_desc`, `long_desc`,
-`similarity`), and `tool_results` records each step's input and output.
+Returns `{"diagnoses","codes","tool_results","elapsed_s"}` where `diagnoses`
+is the list of diagnosis sentences, `codes` is the deduplicated ranked list of
+billable ICD-10-CM matches (`code`, `short_desc`, `long_desc`, `similarity`),
+and `tool_results` records each step's input and output.
 
 ## Dual-diagnosis pipeline (POST /diagnose)
 
-Runs two medical models in parallel and searches both diagnoses for matching
-ICD-10 codes. Uses a LangGraph `StateGraph` with a fan-out / fan-in topology:
+Runs two medical models in parallel and searches both models' diagnoses for
+matching ICD-10 codes. Each model produces 1–10 independent diagnoses; each
+diagnosis is independently searched for its top-k matching billable codes
+(default k=3, configurable), then results are deduplicated and sorted by
+similarity. Uses a LangGraph `StateGraph` with a fan-out / fan-in topology:
 
 ```
 START
@@ -221,14 +231,14 @@ START
   │                                          ↓
   │                                     fan-in
   │                                          ↓
-  │                                 search_both (k=2 each)
+  │                                 search_both (k=3 per dx)
   │                                          ↓
                                            END
 ```
 
 The graph topology guarantees both models are called before the search step
-runs — no prompt engineering or agent cooperation needed. Both models run
-concurrently, so wall-clock time is roughly max(model_a, model_b) + search.
+runs. Both models run concurrently, so wall-clock time is roughly
+max(model_a, model_b) + search.
 
 ```bash
 curl -X POST http://localhost:8000/diagnose \
@@ -236,9 +246,19 @@ curl -X POST http://localhost:8000/diagnose \
   -d '{"text":"Patient has type 2 diabetes mellitus without complications"}'
 ```
 
+Optional `k` field overrides the codes-per-diagnosis (default `3`):
+
+```bash
+curl -X POST http://localhost:8000/diagnose \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"Patient has type 2 diabetes mellitus without complications","k":5}'
+```
+
 Returns `{"results","elapsed_s"}` where `results` is a list of two
-`{model, diagnosis, codes}` entries (one per medical model, in fixed order),
-and each `codes` list carries the top-2 billable ICD-10 matches.
+`{model, diagnoses, codes}` entries (one per medical model, in fixed order).
+Each `diagnoses` is a list of 1–10 diagnosis sentences, and each `codes` list
+carries the deduplicated billable ICD-10 matches (top-k per diagnosis, sorted
+by similarity).
 
 ## Data loading
 

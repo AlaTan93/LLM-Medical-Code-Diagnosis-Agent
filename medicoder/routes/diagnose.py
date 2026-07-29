@@ -1,19 +1,19 @@
 """Dual-diagnosis pipeline: two medical models + ICD-10 vector search.
 
 Uses a LangGraph :class:`StateGraph` to run two medical models in parallel
-(fan-out), then deterministically search both diagnoses for matching billable
-ICD-10-CM codes (fan-in). The graph topology guarantees both models are called
-before the search step — no prompt engineering needed.
+(fan-out), then deterministically search both models' diagnoses for matching
+billable ICD-10-CM codes (fan-in). The graph topology guarantees both models
+are called before the search step — no prompt engineering needed.
 
     START
-      ├──→ diagnose_a (ii-medical-q8)       ──┐
-      ├──→ diagnose_b (deepseek-r1-medical-cot) ─┤  parallel
-      │                                        ↓
-      │                                   fan-in
-      │                                        ↓
-      │                               search_both (k=2 each)
-      │                                        ↓
-                                             END
+      +--> diagnose_a (ii-medical-q8)           --+
+      +--> diagnose_b (deepseek-r1-medical-cot) --+  parallel
+                                                   |
+                                                fan-in
+                                                   |
+                                           search_both (k per dx)
+                                                   |
+                                                  END
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ from medicoder.schemas import (
 router = APIRouter()
 
 MODEL_A = "ii-medical-q8"
-MODEL_B = "deepseek-r1-medical-cot"
+MODEL_B = "gemma-4-medical-q6"
 
 
 class DiagnoseState(TypedDict):
@@ -43,57 +43,61 @@ class DiagnoseState(TypedDict):
 
     Attributes:
         text: The original clinical text (set at invocation).
-        diagnosis_a: Diagnosis from model A (set by ``diagnose_a``).
-        diagnosis_b: Diagnosis from model B (set by ``diagnose_b``).
-        codes_a: Top-2 ICD-10 matches for diagnosis A (set by ``search_both``).
-        codes_b: Top-2 ICD-10 matches for diagnosis B (set by ``search_both``).
+        k: Maximum ICD-10 codes to return per diagnosis (set at invocation).
+        diagnoses_a: Diagnoses from model A (set by ``diagnose_a``).
+        diagnoses_b: Diagnoses from model B (set by ``diagnose_b``).
+        codes_a: ICD-10 matches for model A (set by ``search_both``).
+        codes_b: ICD-10 matches for model B (set by ``search_both``).
     """
 
     text: str
-    diagnosis_a: str
-    diagnosis_b: str
+    k: int
+    diagnoses_a: list[str]
+    diagnoses_b: list[str]
     codes_a: list[ICD10Match]
     codes_b: list[ICD10Match]
 
 
-# ── Node functions ──────────────────────────────────────────────────────────
+# -- Node functions ---------------------------------------------------------
 
 
 def diagnose_a(state: DiagnoseState) -> dict:
-    """Call the first medical model (``ii-medical-q8``) for a diagnosis."""
+    """Call the first medical model (``ii-medical-q8``) for diagnoses."""
     try:
-        return {"diagnosis_a": diagnose(state["text"], MODEL_A)}
+        return {"diagnoses_a": diagnose(state["text"], MODEL_A)}
     except Exception as e:
-        return {"diagnosis_a": f"[error] {e}"}
+        return {"diagnoses_a": [f"[error] {e}"]}
 
 
 def diagnose_b(state: DiagnoseState) -> dict:
     """Call the second medical model (``deepseek-r1-medical-cot``)."""
     try:
-        return {"diagnosis_b": diagnose(state["text"], MODEL_B)}
+        return {"diagnoses_b": diagnose(state["text"], MODEL_B)}
     except Exception as e:
-        return {"diagnosis_b": f"[error] {e}"}
+        return {"diagnoses_b": [f"[error] {e}"]}
 
 
 def search_both(state: DiagnoseState) -> dict:
-    """Run ICD-10 vector search (k=2) for each non-error diagnosis."""
+    """Run ICD-10 vector search for each model's diagnoses."""
+    k = state.get("k", 3)
     return {
-        "codes_a": _safe_search(state.get("diagnosis_a", "")),
-        "codes_b": _safe_search(state.get("diagnosis_b", "")),
+        "codes_a": _safe_search(state.get("diagnoses_a", []), k),
+        "codes_b": _safe_search(state.get("diagnoses_b", []), k),
     }
 
 
-def _safe_search(diagnosis: str) -> list[ICD10Match]:
+def _safe_search(diagnoses: list[str], k: int = 3) -> list[ICD10Match]:
     """Run search_icd10, returning [] on error or empty/error diagnoses."""
-    if not diagnosis or diagnosis.startswith("[error]"):
+    valid = [d for d in diagnoses if d and not d.startswith("[error]")]
+    if not valid:
         return []
     try:
-        return search_icd10(diagnosis, k=2)
+        return search_icd10(valid, k=k)
     except Exception:
         return []
 
 
-# ── Graph construction ──────────────────────────────────────────────────────
+# -- Graph construction -----------------------------------------------------
 
 
 def _build_graph():  # type: ignore[no-untyped-def]
@@ -118,25 +122,25 @@ def _build_graph():  # type: ignore[no-untyped-def]
 _graph = _build_graph()
 
 
-# ── Route ───────────────────────────────────────────────────────────────────
+# -- Route ------------------------------------------------------------------
 
 # curl -X POST 'http://localhost:8000/diagnose' \
 #   -H 'Content-Type: application/json' \
 #   -d '{"text":"Patient has type 2 diabetes mellitus without complications"}'
 @router.post("/diagnose", response_model=DualDiagnoseResponse)
 def run_diagnose(body: DiagnoseRequest) -> DualDiagnoseResponse:
-    """Run two medical models in parallel and search both diagnoses for codes.
+    """Run two medical models in parallel and search both for codes.
 
     Args:
-        body: Request body with the clinical text.
+        body: Request body with the clinical text and optional k.
 
     Returns:
-        One :class:`DiagnosisResult` per model (diagnosis + top-2 ICD-10
-        matches), plus elapsed time.
+        One :class:`DiagnosisResult` per model (diagnoses + ICD-10 matches),
+        plus elapsed time.
     """
     started = time.time()
     result = _graph.invoke(
-        {"text": body.text, "diagnosis_a": "", "diagnosis_b": ""}
+        {"text": body.text, "k": body.k, "diagnoses_a": [], "diagnoses_b": []}  # type: ignore
     )
     elapsed = time.time() - started
 
@@ -144,12 +148,12 @@ def run_diagnose(body: DiagnoseRequest) -> DualDiagnoseResponse:
         results=[
             DiagnosisResult(
                 model=MODEL_A,
-                diagnosis=result.get("diagnosis_a", ""),
+                diagnoses=result.get("diagnoses_a", []),
                 codes=result.get("codes_a", []),
             ),
             DiagnosisResult(
                 model=MODEL_B,
-                diagnosis=result.get("diagnosis_b", ""),
+                diagnoses=result.get("diagnoses_b", []),
                 codes=result.get("codes_b", []),
             ),
         ],

@@ -26,6 +26,7 @@ def chat_completion(
     model: str,
     messages: list[dict],
     *,
+    temperature: float = 0.0,
     timeout: float = CHAT_TIMEOUT,
 ) -> str:
     """Send a chat completion request and return the assistant's reply text.
@@ -36,6 +37,8 @@ def chat_completion(
     Args:
         model: A LiteLLM alias (e.g. ``ii-medical-q8``).
         messages: OpenAI-format message list.
+        temperature: Sampling temperature (default ``0.0`` for deterministic
+            output appropriate for medical coding).
         timeout: Request timeout in seconds.
 
     Returns:
@@ -47,7 +50,12 @@ def chat_completion(
         urllib.error.URLError: If the proxy is unreachable or times out.
     """
     payload = json.dumps(
-        {"model": model, "messages": messages, "stream": False}
+        {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": False,
+        }
     ).encode()
     req = urllib.request.Request(
         f"{base_url()}/chat/completions",

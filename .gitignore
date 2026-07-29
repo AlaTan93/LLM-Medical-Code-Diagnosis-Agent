@@ -21,3 +21,4 @@ prev_session.txt
 # Docker secrets + local model weights
 .env
 .vscode
+eval_*.json

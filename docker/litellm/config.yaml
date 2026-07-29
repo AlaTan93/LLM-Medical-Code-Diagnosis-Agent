@@ -29,9 +29,14 @@ model_list:
   # Hardcoded to http://ollama:11434 — dormant in cloud mode (errors only if
   # called). LiteLLM splits the provider on the first "/", so e.g.
   # ollama/hf.co/...:Q8_0 -> provider=ollama, model=hf.co/...:Q8_0.
-  - model_name: deepseek-r1-medical-cot
+  # - model_name: deepseek-r1-medical-cot
+  #   litellm_params:
+  #     model: ollama/hf.co/rwibawa/DeepSeek-R1-Medical-COT:Q4_K_M
+  #     api_base: http://ollama:11434
+  #     api_key: dummy
+  - model_name: gemma-4-medical-q6
     litellm_params:
-      model: ollama/hf.co/rwibawa/DeepSeek-R1-Medical-COT:Q4_K_M
+      model: ollama/hf.co/mradermacher/Gemma-4-Medical-ICD10-i1-GGUF:Q6_K
       api_base: http://ollama:11434
       api_key: dummy
   - model_name: ii-medical-q8
@@ -39,11 +44,11 @@ model_list:
       model: ollama/hf.co/Intelligent-Internet/II-Medical-8B-1706-GGUF:Q8_0
       api_base: http://ollama:11434
       api_key: dummy
-  - model_name: qwen35-medical
-    litellm_params:
-      model: ollama/hf.co/qaootkcx/qwen35-9b-medical:Q4_K_M
-      api_base: http://ollama:11434
-      api_key: dummy
+  # - model_name: qwen35-medical
+  #   litellm_params:
+  #     model: ollama/hf.co/qaootkcx/qwen35-9b-medical:Q4_K_M
+  #     api_base: http://ollama:11434
+  #     api_key: dummy
 
   # Embedding model for ICD-10 vector similarity search (1024-dim bge-m3).
   # The app calls POST /v1/embeddings {"model": "embed", "input": [...]}.
