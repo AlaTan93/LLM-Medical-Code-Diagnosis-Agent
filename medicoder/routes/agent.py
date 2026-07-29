@@ -14,7 +14,7 @@ from functools import lru_cache
 
 from fastapi import APIRouter, HTTPException
 from langchain_openai import ChatOpenAI
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 
 from medicoder.messages import extract_tool_results, last_content
 from medicoder.schemas import TestRequest, TestResponse
@@ -48,7 +48,9 @@ def _build_agent(model: str):  # type: ignore[no-untyped-def]
         A compiled langgraph ReAct agent.
     """
     llm = ChatOpenAI(model=model, use_responses_api=False)
-    return create_react_agent(llm, tools=[echo, get_flag], prompt=_SYSTEM_PROMPT)
+    return create_agent(model = llm, 
+                        tools=[echo, get_flag], 
+                        system_prompt=_SYSTEM_PROMPT)
 
 
 # curl -X POST 'http://localhost:8000/agent/ii-medical-q8' \

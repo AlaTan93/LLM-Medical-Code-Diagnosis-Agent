@@ -85,10 +85,10 @@ def search_icd10(query: str, k: int = 3) -> list[ICD10Match]:
 
     return [
         ICD10Match(
-            code=r["code"],
-            short_desc=r["short_desc"],
-            long_desc=r["long_desc"],
-            similarity=round(float(r["similarity"]), 4),
+            code=r["code"], # type: ignore
+            short_desc=r["short_desc"], # type: ignore
+            long_desc=r["long_desc"], # type: ignore
+            similarity=round(float(r["similarity"]), 4), # type: ignore
         )
         for r in rows
     ]
