@@ -28,7 +28,7 @@ class ICD10Code(BaseModel):
 
 
 class TestRequest(BaseModel):
-    """Request body for the LLM test and agent endpoints.
+    """Request body for the LLM test endpoint.
 
     Attributes:
         prompt: The user prompt. ``None`` lets the endpoint use its default.
@@ -38,7 +38,7 @@ class TestRequest(BaseModel):
 
 
 class ToolResult(BaseModel):
-    """A single step captured from a pipeline or agent run.
+    """A single step captured from a pipeline run.
 
     Attributes:
         tool: The name of the tool or step (e.g. "diagnose", "get_flag").
@@ -52,24 +52,19 @@ class ToolResult(BaseModel):
 
 
 class TestResponse(BaseModel):
-    """Response for the LLM test and agent endpoints.
+    """Response for the LLM test endpoint.
 
     Attributes:
         model: The LiteLLM alias that produced the reply.
         prompt: The prompt actually sent (after default resolution).
-        response: The model/agent's reply text.
+        response: The model's reply text.
         elapsed_s: Wall-clock seconds for the call (model cold starts can be slow).
-        tool_results: Tool invocations captured during an agent run (``None`` for
-            the plain ``/test`` route). Each entry records the tool name, the
-            arguments the model supplied, and the value the tool returned — the
-            ground-truth output, independent of the model's textual summary.
     """
 
     model: str
     prompt: str
     response: str
     elapsed_s: float
-    tool_results: list[ToolResult] | None = None
 
 
 class CodeRequest(BaseModel):
@@ -115,4 +110,41 @@ class CodeResponse(BaseModel):
     diagnosis: str
     codes: list[ICD10Match]
     tool_results: list[ToolResult] | None = None
+    elapsed_s: float
+
+
+class DiagnoseRequest(BaseModel):
+    """Request body for the dual-diagnosis endpoint.
+
+    Attributes:
+        text: Clinical text or patient description to diagnose.
+    """
+
+    text: str
+
+
+class DiagnosisResult(BaseModel):
+    """A single model's diagnosis and its matching ICD-10 codes.
+
+    Attributes:
+        model: The LiteLLM alias that produced the diagnosis.
+        diagnosis: The one-sentence diagnosis, or empty if the model failed.
+        codes: Top matching billable ICD-10-CM codes (most similar first).
+    """
+
+    model: str
+    diagnosis: str
+    codes: list[ICD10Match]
+
+
+class DualDiagnoseResponse(BaseModel):
+    """Response from the dual-diagnosis pipeline.
+
+    Attributes:
+        results: One :class:`DiagnosisResult` per medical model, in the order
+            the models are configured (ii-medical-q8, deepseek-r1-medical-cot).
+        elapsed_s: Wall-clock seconds for the entire pipeline.
+    """
+
+    results: list[DiagnosisResult]
     elapsed_s: float

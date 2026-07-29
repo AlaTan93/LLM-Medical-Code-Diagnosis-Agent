@@ -19,7 +19,3 @@ name = "hf.co/qaootkcx/qwen35-9b-medical:Q4_K_M"
 [[model]]
 name = "bge-m3"
 
-# Generalist orchestrator for the /code pipeline (strong tool-caller).
-[[model]]
-name = "qwen2.5:7b"
-

@@ -6,8 +6,8 @@ ICD-10-CM medical coding prototype. The default stack runs as 3 containers
 
 | Service    | Image                                 | Role                                                                  |
 | ---------- | ------------------------------------- | -------------------------------------------------------------------- |
-| `postgres` | `pgvector/pgvector:pg16`              | Stores `icd10_codes`; `medicoder` (rw) + `agent` (ro) roles; LiteLLM audit DB |
-| `medicoder`| built from `Dockerfile`               | App + idempotent ICD-10 loader + `/test`, `/agent`, `/code` endpoints  |
+| `postgres` | `pgvector/pgvector:pg16`              | Stores `icd10_codes`; `medicoder` role (rw); LiteLLM audit DB |
+| `medicoder`| built from `Dockerfile`               | App + idempotent ICD-10 loader + `/test`, `/code`, `/diagnose` endpoints  |
 | `litellm`  | `ghcr.io/berriai/litellm:main-stable` | Local proxy: routes the model alias to your upstream LLM + audits every call/response to Postgres |
 
 `medicoder` always points its OpenAI-compatible client at the local LiteLLM
@@ -37,14 +37,13 @@ docker compose up --build
 ## Configure the upstream LLM
 
 LiteLLM routes model aliases your app calls to upstream LLMs. Alias `A` is
-configured by three `.env` variables on the `litellm` container; the medical,
-orchestrator, and embedding aliases are hardcoded to the in-container Ollama
+configured by three `.env` variables on the `litellm` container; the medical
+and embedding aliases are hardcoded to the in-container Ollama
 (see `docker/litellm/config.yaml`):
 
 | Alias | Model | Notes |
 | ----- | ----- | ----- |
 | `A` | `${LLM_UPSTREAM_MODEL}` | Env-driven; any OpenAI-compatible endpoint |
-| `orchestrator` | `qwen2.5:7b` | Generalist tool-caller (reserved for future agent features) |
 | `ii-medical-q8` | `II-Medical-8B-1706-GGUF:Q8_0` | Medical diagnosis generation |
 | `deepseek-r1-medical-cot` | `DeepSeek-R1-Medical-COT:Q4_K_M` | Medical (thinking model) |
 | `qwen35-medical` | `qwen35-9b-medical:Q4_K_M` | Medical |
@@ -172,47 +171,6 @@ Returns `{"model","prompt","response","elapsed_s"}`. Unknown alias → `404`;
 LiteLLM unreachable → `502`; model-load timeout → `504`. (First call per model
 loads it into VRAM, ~10–60s.)
 
-## Agentic LLM calls (POST /agent/{model})
-
-Like `/test/{model}`, but runs the prompt through a langchain
-`create_agent` so the model can call tools. The model is reached via
-LangChain's `openai:` provider (`ChatOpenAI` with `use_responses_api=False`),
-which reads `OPENAI_BASE_URL` / `OPENAI_API_KEY` — both set automatically on the
-`medicoder` container (derived from `LLM_BASE_URL` + a dummy key; LiteLLM
-enforces no key).
-
-Two test tools are wired up:
-
-- **`echo(text)`** — echoes its argument back verbatim.
-- **`get_flag(text)`** — returns a secret flag only when called with `"hello"`.
-  This is an anti-confabulation probe: the flag can only be obtained by actually
-  calling the tool, so if it appears in the response the model genuinely
-  tool-called (rather than hallucinating).
-
-The response includes a `tool_results` array — one entry per tool call the model
-made, recording the tool name, the arguments the model supplied, and the value
-the tool returned. This is the **ground-truth** tool output, independent of the
-model's own textual summary (which may paraphrase, truncate, or omit results).
-
-> Use a **tool-calling-capable** model — e.g. `ii-medical-q8` or
-> `deepseek-r1-medical-cot`. Note that only `ii-medical-q8` and
-> `deepseek-r1-medical-cot` are known to emit structured tool calls through the
-> local Ollama; `qwen35-medical` ignores tools despite declaring the capability.
-
-```bash
-# default prompt (exercises echo)
-curl -X POST http://localhost:8000/agent/ii-medical-q8
-
-# custom prompt
-curl -X POST http://localhost:8000/agent/ii-medical-q8 \
-  -H 'Content-Type: application/json' \
-  -d '{"prompt":"Call the get_flag tool with hello and tell me the flag"}'
-```
-
-Returns `{"model","prompt","response","elapsed_s","tool_results"}`. The agent
-may make several LLM round-trips, so cold-start calls can be slower than
-`/test`.
-
 ## Coding pipeline (POST /code)
 
 The main endpoint: a deterministic two-step pipeline that produces billable
@@ -251,6 +209,37 @@ Returns `{"diagnosis","codes","tool_results","elapsed_s"}` where `codes` is the
 ranked list of billable ICD-10-CM matches (`code`, `short_desc`, `long_desc`,
 `similarity`), and `tool_results` records each step's input and output.
 
+## Dual-diagnosis pipeline (POST /diagnose)
+
+Runs two medical models in parallel and searches both diagnoses for matching
+ICD-10 codes. Uses a LangGraph `StateGraph` with a fan-out / fan-in topology:
+
+```
+START
+  ├──→ diagnose_a (ii-medical-q8)           ──┐
+  ├──→ diagnose_b (deepseek-r1-medical-cot) ──┤  parallel
+  │                                          ↓
+  │                                     fan-in
+  │                                          ↓
+  │                                 search_both (k=2 each)
+  │                                          ↓
+                                           END
+```
+
+The graph topology guarantees both models are called before the search step
+runs — no prompt engineering or agent cooperation needed. Both models run
+concurrently, so wall-clock time is roughly max(model_a, model_b) + search.
+
+```bash
+curl -X POST http://localhost:8000/diagnose \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"Patient has type 2 diabetes mellitus without complications"}'
+```
+
+Returns `{"results","elapsed_s"}` where `results` is a list of two
+`{model, diagnosis, codes}` entries (one per medical model, in fixed order),
+and each `codes` list carries the top-2 billable ICD-10 matches.
+
 ## Data loading
 
 ### ICD-10 codes
@@ -282,13 +271,11 @@ All 98,186 codes are embedded (74,719 billable + 23,467 non-billable). The
 non-billable codes are pre-embedded so they're search-ready if CMS reclassifies
 them. The `/code` search query filters to `is_billable` at query time.
 
-## Roles / the scoped SQL tool
+## Roles
 
-`docker/postgres/01-roles.sh` creates two roles:
+`docker/postgres/01-roles.sh` creates one role:
 
 - `medicoder` — owns `icd10_codes` (read/write).
-- `agent` — `SELECT`-only, with `default_transaction_read_only = on`. Connect the
-  LangChain read-only SQL tool as this role (see `human_plan.txt`, Option 1).
 
 ## Debugging (VSCode, in-container)
 
@@ -356,22 +343,22 @@ docker/program/entrypoint.sh     runs loader, then the app command
 docker/program/debug.sh          debugpy entrypoint used by the debug overlay
 docker/program/pull_models.py    ollama-init sidecar: auto-pull models.toml on stack up
 docker/postgres/00-schema.sql    extension + icd10_codes table + indexes
-docker/postgres/01-roles.sh      medicoder (rw) + agent (ro) roles
+docker/postgres/01-roles.sh      medicoder (rw) role
 docker/postgres/02-litellm.sh    litellm role + audit database
 docker/postgres/02-embedding.sql pgvector embedding column + HNSW index (1024-dim)
 docker/litellm/config.yaml       LiteLLM alias -> upstream routing + DB logging
 docker/litellm/log_callback.py   custom callback -> llm_call_log (prompts/thinking/output/tools)
 medicoder/proxy.py               shared LiteLLM client: chat_completion(), embed(), strip_thinking()
-medicoder/messages.py            shared message utils: extract_tool_results(), last_content()
-medicoder/schemas.py             Pydantic models (ICD10Code, TestRequest/Response, CodeRequest/Response, ToolResult)
+medicoder/medical.py             shared pipeline functions: diagnose(), search_icd10()
+medicoder/schemas.py             Pydantic models (ICD10Code, TestRequest/Response, CodeRequest/Response, DiagnoseRequest/Response, ToolResult)
 medicoder/db/connect.py          shared CLI Postgres connection (retried)
 medicoder/db/load_icd10.py       fixed-width -> COPY loader
 medicoder/db/embed_icd10.py      idempotent bulk embedder (bge-m3 via LiteLLM)
 medicoder/db/pool.py             psycopg connection pool (lifespan-managed)
 medicoder/routes/icd10.py        /codes endpoints
 medicoder/routes/llm.py          POST /test/{model} — call a LiteLLM alias
-medicoder/routes/agent.py        POST /agent/{model} — langchain agent + echo/get_flag tools
 medicoder/routes/code.py         POST /code — deterministic pipeline (diagnose + search_icd10)
+medicoder/routes/diagnose.py     POST /diagnose — LangGraph StateGraph fan-out (2 models + search)
 main.py                          FastAPI app + lifespan + router wiring
 models.toml                      registry models for the ollama-init sidecar
 .vscode/{launch,tasks,extensions}.json  VSCode container debugging

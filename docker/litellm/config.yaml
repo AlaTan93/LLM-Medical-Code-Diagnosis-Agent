@@ -53,13 +53,6 @@ model_list:
       api_base: http://ollama:11434
       api_key: dummy
 
-  # Generalist orchestrator for the /code pipeline (strong tool-caller).
-  - model_name: orchestrator
-    litellm_params:
-      model: ollama/qwen2.5:7b
-      api_base: http://ollama:11434
-      api_key: dummy
-
 litellm_settings:
   drop_params: true
   # Custom success callback → llm_call_log (see docker/litellm/log_callback.py).

@@ -1,6 +1,6 @@
 """Thin client for the in-network LiteLLM proxy.
 
-Every route and tool calls these functions instead of building raw urllib
+Every route calls these functions instead of building raw urllib
 requests — one place to change timeout, error handling, or transport.
 """
 
@@ -34,7 +34,7 @@ def chat_completion(
     (local Qwen3-based models emit them inline).
 
     Args:
-        model: A LiteLLM alias (e.g. ``ii-medical-q8``, ``orchestrator``).
+        model: A LiteLLM alias (e.g. ``ii-medical-q8``).
         messages: OpenAI-format message list.
         timeout: Request timeout in seconds.
 
