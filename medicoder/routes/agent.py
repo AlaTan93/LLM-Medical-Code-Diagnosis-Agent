@@ -1,6 +1,6 @@
-"""Agent testing route: run a tool-calling ReAct agent on a prompt.
+"""Agent testing route: run a tool-calling agent on a prompt.
 
-Uses langgraph's ``create_react_agent`` routed through the LiteLLM proxy.
+Uses langchain's ``create_agent`` routed through the LiteLLM proxy.
 The agent has two simple tools (``echo`` and ``get_flag``) for testing
 tool-calling behaviour. ``model`` is a LiteLLM alias; only tool-calling-capable
 models are usable (``ii-medical-q8`` and ``deepseek-r1-medical-cot`` are known
@@ -38,14 +38,14 @@ def get_flag(text: str) -> str:
 
 @lru_cache(maxsize=8)
 def _build_agent(model: str):  # type: ignore[no-untyped-def]
-    """Build (and cache) a ReAct agent for a LiteLLM alias.
+    """Build (and cache) a tool-calling agent for a LiteLLM alias.
 
     Args:
         model: A LiteLLM alias (e.g. ``ii-medical-q8``). Only tool-calling-capable
             models are usable.
 
     Returns:
-        A compiled langgraph ReAct agent.
+        A compiled langchain agent.
     """
     llm = ChatOpenAI(model=model, use_responses_api=False)
     return create_agent(model = llm, 
@@ -58,7 +58,7 @@ def _build_agent(model: str):  # type: ignore[no-untyped-def]
 #   -d '{"prompt":"Use the echo tool to repeat: hello"}'
 @router.post("/agent/{model}", response_model=TestResponse)
 def run_agent(model: str, body: TestRequest | None = None) -> TestResponse:
-    """Run a ReAct agent on a prompt and return its final reply + tool trace.
+    """Run a tool-calling agent on a prompt and return its final reply + tool trace.
 
     Args:
         model: A LiteLLM alias for a tool-calling-capable model.

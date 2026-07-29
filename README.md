@@ -174,8 +174,8 @@ loads it into VRAM, ~10–60s.)
 
 ## Agentic LLM calls (POST /agent/{model})
 
-Like `/test/{model}`, but runs the prompt through a langgraph
-`create_react_agent` so the model can call tools. The model is reached via
+Like `/test/{model}`, but runs the prompt through a langchain
+`create_agent` so the model can call tools. The model is reached via
 LangChain's `openai:` provider (`ChatOpenAI` with `use_responses_api=False`),
 which reads `OPENAI_BASE_URL` / `OPENAI_API_KEY` — both set automatically on the
 `medicoder` container (derived from `LLM_BASE_URL` + a dummy key; LiteLLM
@@ -370,7 +370,7 @@ medicoder/db/embed_icd10.py      idempotent bulk embedder (bge-m3 via LiteLLM)
 medicoder/db/pool.py             psycopg connection pool (lifespan-managed)
 medicoder/routes/icd10.py        /codes endpoints
 medicoder/routes/llm.py          POST /test/{model} — call a LiteLLM alias
-medicoder/routes/agent.py        POST /agent/{model} — langgraph ReAct agent + echo/get_flag tools
+medicoder/routes/agent.py        POST /agent/{model} — langchain agent + echo/get_flag tools
 medicoder/routes/code.py         POST /code — deterministic pipeline (diagnose + search_icd10)
 main.py                          FastAPI app + lifespan + router wiring
 models.toml                      registry models for the ollama-init sidecar
