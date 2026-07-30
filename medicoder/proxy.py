@@ -27,7 +27,7 @@ def chat_completion(
     model: str,
     messages: list[dict],
     *,
-    temperature: float = 0.0,
+    temperature: float = 0.1,
     max_tokens: int = MAX_TOKENS,
     timeout: float = CHAT_TIMEOUT,
 ) -> str:

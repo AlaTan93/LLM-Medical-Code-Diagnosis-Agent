@@ -20,7 +20,7 @@ from medicoder.schemas import ICD10Match
 _MAX_DIAGNOSES = 10
 
 _DIAGNOSE_SYSTEM = (
-    "Analyze the patient's clinical presentation, then produce diagnoses.\n"
+    "Analyze the patient's clinical presentation, then produce ICD-10 type diagnoses.\n"
     "Output a JSON object with two fields:\n"
     '- "reasoning": Your brief clinical reasoning (analysis of symptoms, '
     "findings, and conclusions).\n"

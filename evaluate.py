@@ -23,7 +23,7 @@ BASE_URL = "http://localhost:8000"
 CASES_PATH = "data/icd10_cm_cases.json"
 
 MODEL_A = "ii-medical-q8"
-MODEL_B = "gemma-4-medical-q6"
+MODEL_B = "deepseek-r1-medical-cot"
 
 
 # ---------------------------------------------------------------------------

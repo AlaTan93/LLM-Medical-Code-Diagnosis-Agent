@@ -35,7 +35,7 @@ from medicoder.schemas import (
 router = APIRouter()
 
 MODEL_A = "ii-medical-q8"
-MODEL_B = "gemma-4-medical-q6"
+MODEL_B = "deepseek-r1-medical-cot"
 
 
 class DiagnoseState(TypedDict):
