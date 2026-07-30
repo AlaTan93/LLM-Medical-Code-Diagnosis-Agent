@@ -19,6 +19,10 @@ from medicoder.schemas import ICD10Match
 
 _MAX_DIAGNOSES = 10
 
+_MAX_RETRIES = 4
+_TEMP_INCREMENT = 0.05
+_MAX_TEMP = 0.3
+
 _DIAGNOSE_SYSTEM = (
     "Analyze the patient's clinical presentation, then produce ICD-10 type diagnoses.\n"
     "Output a JSON object with two fields:\n"
@@ -31,6 +35,14 @@ _DIAGNOSE_SYSTEM = (
     '{"reasoning": "The patient has a history of opioid dependence and is '
     'currently in remission after detoxification. No acute withdrawal '
     'symptoms are noted.", "diagnoses": ["Opioid dependence, in remission"]}'
+)
+
+_DIAGNOSE_SYSTEM_CONCISE = (
+    "Output a JSON object with a \"diagnoses\" array of 1-10 concise "
+    "ICD-10 type diagnostic sentences.\n"
+    "Do NOT include ICD-10 codes, code numbers, or 'patient has'.\n"
+    "Do NOT include reasoning or explanation.\n\n"
+    "Example: {\"diagnoses\": [\"Opioid dependence, in remission\"]}"
 )
 
 _BOXED_RE = re.compile(r"\\boxed\{(.*)\}", re.DOTALL)
@@ -139,46 +151,86 @@ def _parse_diagnoses(raw: str) -> list[str]:
     return lines[:_MAX_DIAGNOSES]
 
 
-def diagnose(text: str, model: str) -> tuple[list[str], str]:
+def diagnose(
+    text: str,
+    model: str,
+    *,
+    temperature: float = 0.1,
+) -> tuple[list[str], str]:
     """Forward clinical text to a medical model for diagnoses and reasoning.
 
-    Pipeline: system prompt (JSON format) → model call → strip thinking →
-    JSON extraction → Pydantic validation → fallback to regex parsing.
+    Uses an incremental retry strategy: the first attempt uses the full
+    system prompt (with reasoning) and a 4096-token budget.  If the model
+    produces zero diagnoses (e.g. thinking loop consumed all tokens or the
+    output was unparseable), subsequent retries switch to a concise prompt
+    that suppresses thinking, a 2048-token budget, and a slightly higher
+    temperature (+0.05 per attempt, capped at 0.3).
 
-    The system prompt asks the model to output JSON with both a
-    ``reasoning`` field (clinical explanation) and a ``diagnoses`` array.
-    When the model complies, :class:`DiagnosisOutput` validates the
-    structure and cleans entries.  When it doesn't (e.g. plain-text
-    output), :func:`_parse_diagnoses` provides a regex-based fallback so
-    the pipeline degrades gracefully (reasoning will be empty in that case).
+    Pipeline per attempt: system prompt → model call → strip thinking →
+    JSON extraction → Pydantic validation → fallback to regex parsing.
 
     Args:
         text: Clinical text or patient description.
         model: LiteLLM alias for the medical model (e.g. ``ii-medical-q8``).
+        temperature: Base sampling temperature (default 0.1).  Retries
+            increment this by 0.05 per attempt up to :data:`_MAX_TEMP`.
 
     Returns:
         A ``(diagnoses, reasoning)`` tuple where *diagnoses* is a list of
         0-_MAX_DIAGNOSES strings and *reasoning* is the model's clinical
-        explanation (empty string on fallback).
+        explanation (empty string on fallback or concise-prompt retries).
     """
-    messages = [
-        {"role": "system", "content": _DIAGNOSE_SYSTEM},
-        {"role": "user", "content": text},
-    ]
-    raw = proxy.chat_completion(model, messages)
+    for attempt in range(_MAX_RETRIES):
+        temp = min(temperature + attempt * _TEMP_INCREMENT, _MAX_TEMP)
 
-    # Try structured JSON first (preferred path for models that follow
-    # the system prompt's format instructions).
-    data = _extract_json(raw)
-    if data is not None:
+        # First attempt: full prompt (with reasoning), generous token budget.
+        # Retries: concise prompt (no reasoning), reduced token budget to
+        # cap damage from thinking loops.
+        if attempt == 0:
+            messages = [
+                {"role": "system", "content": _DIAGNOSE_SYSTEM},
+                {"role": "user", "content": text},
+            ]
+            max_tokens = 4096
+        else:
+            print(
+                f"[diagnose] retry {attempt}/{_MAX_RETRIES - 1} "
+                f"temp={temp:.2f}"
+            )
+            messages = [
+                {"role": "system", "content": _DIAGNOSE_SYSTEM_CONCISE},
+                {"role": "user", "content": text},
+            ]
+            max_tokens = 2048
+
         try:
-            result = DiagnosisOutput(**data)
-            return result.diagnoses, result.reasoning
-        except (ValidationError, TypeError):
-            pass
+            raw = proxy.chat_completion(
+                model, messages, temperature=temp, max_tokens=max_tokens
+            )
+        except Exception:
+            if attempt < _MAX_RETRIES - 1:
+                continue
+            raise
 
-    # Fallback: line-based regex parsing for models that ignore JSON.
-    return _parse_diagnoses(raw), ""
+        # Try structured JSON first (preferred path for models that follow
+        # the system prompt's format instructions).
+        data = _extract_json(raw)
+        if data is not None:
+            try:
+                result = DiagnosisOutput(**data)
+                if result.diagnoses:
+                    return result.diagnoses, result.reasoning
+            except (ValidationError, TypeError):
+                pass
+
+        # Fallback: line-based regex parsing for models that ignore JSON.
+        diagnoses = _parse_diagnoses(raw)
+        if diagnoses:
+            return diagnoses, ""
+
+    # All retries exhausted.
+    print(f"[diagnose] all {_MAX_RETRIES} attempts failed; returning empty")
+    return [], ""
 
 
 def search_icd10(queries: list[str], k: int = 3) -> list[ICD10Match]:

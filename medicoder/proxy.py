@@ -39,8 +39,8 @@ def chat_completion(
     Args:
         model: A LiteLLM alias (e.g. ``ii-medical-q8``).
         messages: OpenAI-format message list.
-        temperature: Sampling temperature (default ``0.0`` for deterministic
-            output appropriate for medical coding).
+        temperature: Sampling temperature (default ``0.1`` — low randomness
+            appropriate for medical coding).
         max_tokens: Maximum tokens to generate (default 8192).  Caps runaway
             generation before it wastes GPU time.
         timeout: Request timeout in seconds.
