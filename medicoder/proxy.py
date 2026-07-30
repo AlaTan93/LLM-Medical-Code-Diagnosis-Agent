@@ -11,8 +11,9 @@ import os
 import re
 import urllib.request
 
-CHAT_TIMEOUT = 120.0
+CHAT_TIMEOUT = 300.0
 EMBED_TIMEOUT = 60.0
+MAX_TOKENS = 8192
 
 _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
 
@@ -27,6 +28,7 @@ def chat_completion(
     messages: list[dict],
     *,
     temperature: float = 0.0,
+    max_tokens: int = MAX_TOKENS,
     timeout: float = CHAT_TIMEOUT,
 ) -> str:
     """Send a chat completion request and return the assistant's reply text.
@@ -39,6 +41,8 @@ def chat_completion(
         messages: OpenAI-format message list.
         temperature: Sampling temperature (default ``0.0`` for deterministic
             output appropriate for medical coding).
+        max_tokens: Maximum tokens to generate (default 2048).  Caps runaway
+            generation before it wastes GPU time.
         timeout: Request timeout in seconds.
 
     Returns:
@@ -54,6 +58,7 @@ def chat_completion(
             "model": model,
             "messages": messages,
             "temperature": temperature,
+            "max_tokens": max_tokens,
             "stream": False,
         }
     ).encode()
