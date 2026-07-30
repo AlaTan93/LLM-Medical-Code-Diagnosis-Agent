@@ -73,7 +73,8 @@ class CodeRequest(BaseModel):
     Attributes:
         text: Clinical text or patient description to code.
         medical_model: LiteLLM alias of the medical model that generates the
-            one-sentence diagnosis (default ``ii-medical-q8``).
+            diagnoses (default ``ii-medical-q8``).
+        k: Maximum ICD-10 codes to return per diagnosis (default 3).
     """
 
     text: str
@@ -104,12 +105,16 @@ class CodeResponse(BaseModel):
     Attributes:
         diagnoses: The diagnoses produced by the medical model (1-10 entries).
         codes: Matching billable ICD-10-CM codes (most similar first).
-        tool_results: Step-by-step trace (diagnose + search_icd10 invocations).
+        reasoning: The model's clinical reasoning for the diagnoses
+            (empty string if the model didn't provide any).
+        tool_results: Step-by-step trace of the pipeline (diagnose + search
+            invocations) for debugging and transparency.
         elapsed_s: Wall-clock seconds for the entire pipeline.
     """
 
     diagnoses: list[str]
     codes: list[ICD10Match]
+    reasoning: str = ""
     tool_results: list[ToolResult] | None = None
     elapsed_s: float
 
@@ -127,17 +132,20 @@ class DiagnoseRequest(BaseModel):
 
 
 class DiagnosisResult(BaseModel):
-    """A single model's diagnoses and their matching ICD-10 codes.
+    """A single model's diagnoses, reasoning, and matching ICD-10 codes.
 
     Attributes:
         model: The LiteLLM alias that produced the diagnoses.
         diagnoses: The diagnoses produced by the model (1-10 entries).
         codes: Matching billable ICD-10-CM codes (most similar first).
+        reasoning: The model's clinical reasoning (empty string if the
+            model didn't provide any).
     """
 
     model: str
     diagnoses: list[str]
     codes: list[ICD10Match]
+    reasoning: str = ""
 
 
 class DualDiagnoseResponse(BaseModel):
@@ -145,7 +153,7 @@ class DualDiagnoseResponse(BaseModel):
 
     Attributes:
         results: One :class:`DiagnosisResult` per medical model, in the order
-            the models are configured (ii-medical-q8, deepseek-r1-medical-cot).
+            the models are configured (ii-medical-q8, gemma-4-medical-q6).
         elapsed_s: Wall-clock seconds for the entire pipeline.
     """
 

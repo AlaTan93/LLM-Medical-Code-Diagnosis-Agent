@@ -41,7 +41,7 @@ def chat_completion(
         messages: OpenAI-format message list.
         temperature: Sampling temperature (default ``0.0`` for deterministic
             output appropriate for medical coding).
-        max_tokens: Maximum tokens to generate (default 2048).  Caps runaway
+        max_tokens: Maximum tokens to generate (default 8192).  Caps runaway
             generation before it wastes GPU time.
         timeout: Request timeout in seconds.
 

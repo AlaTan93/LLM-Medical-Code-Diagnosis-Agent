@@ -46,10 +46,11 @@ def run_code_pipeline(body: CodeRequest) -> CodeResponse:
     started = time.time()
     tool_results: list[ToolResult] = []
     diagnoses: list[str] = []
+    reasoning = ""
 
     # Step 1 — diagnose: medical model produces 1-10 independent diagnoses.
     try:
-        diagnoses = diagnose(body.text, body.medical_model)
+        diagnoses, reasoning = diagnose(body.text, body.medical_model)
         tool_results.append(
             ToolResult(
                 tool="diagnose",
@@ -92,6 +93,7 @@ def run_code_pipeline(body: CodeRequest) -> CodeResponse:
     return CodeResponse(
         diagnoses=diagnoses,
         codes=codes,
+        reasoning=reasoning,
         tool_results=tool_results,
         elapsed_s=round(elapsed, 2),
     )

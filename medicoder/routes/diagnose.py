@@ -6,14 +6,14 @@ billable ICD-10-CM codes (fan-in). The graph topology guarantees both models
 are called before the search step — no prompt engineering needed.
 
     START
-      +--> diagnose_a (ii-medical-q8)           --+
-      +--> diagnose_b (deepseek-r1-medical-cot) --+  parallel
-                                                   |
-                                                fan-in
-                                                   |
-                                           search_both (k per dx)
-                                                   |
-                                                  END
+      +--> diagnose_a (ii-medical-q8)      --+
+      +--> diagnose_b (gemma-4-medical-q6) --+  parallel
+                                               |
+                                            fan-in
+                                               |
+                                       search_both (k per dx)
+                                               |
+                                              END
 """
 
 from __future__ import annotations
@@ -43,9 +43,12 @@ class DiagnoseState(TypedDict):
 
     Attributes:
         text: The original clinical text (set at invocation).
-        k: Maximum ICD-10 codes to return per diagnosis (set at invocation).
+        k: Maximum ICD-10 codes to return per diagnosis (default 3, set
+            at invocation from the request body).
         diagnoses_a: Diagnoses from model A (set by ``diagnose_a``).
         diagnoses_b: Diagnoses from model B (set by ``diagnose_b``).
+        reasoning_a: Clinical reasoning from model A (set by ``diagnose_a``).
+        reasoning_b: Clinical reasoning from model B (set by ``diagnose_b``).
         codes_a: ICD-10 matches for model A (set by ``search_both``).
         codes_b: ICD-10 matches for model B (set by ``search_both``).
     """
@@ -54,6 +57,8 @@ class DiagnoseState(TypedDict):
     k: int
     diagnoses_a: list[str]
     diagnoses_b: list[str]
+    reasoning_a: str
+    reasoning_b: str
     codes_a: list[ICD10Match]
     codes_b: list[ICD10Match]
 
@@ -64,17 +69,19 @@ class DiagnoseState(TypedDict):
 def diagnose_a(state: DiagnoseState) -> dict:
     """Call the first medical model (``ii-medical-q8``) for diagnoses."""
     try:
-        return {"diagnoses_a": diagnose(state["text"], MODEL_A)}
+        diagnoses, reasoning = diagnose(state["text"], MODEL_A)
+        return {"diagnoses_a": diagnoses, "reasoning_a": reasoning}
     except Exception as e:
-        return {"diagnoses_a": [f"[error] {e}"]}
+        return {"diagnoses_a": [f"[error] {e}"], "reasoning_a": ""}
 
 
 def diagnose_b(state: DiagnoseState) -> dict:
-    """Call the second medical model (``deepseek-r1-medical-cot``)."""
+    """Call the second medical model (``gemma-4-medical-q6``)."""
     try:
-        return {"diagnoses_b": diagnose(state["text"], MODEL_B)}
+        diagnoses, reasoning = diagnose(state["text"], MODEL_B)
+        return {"diagnoses_b": diagnoses, "reasoning_b": reasoning}
     except Exception as e:
-        return {"diagnoses_b": [f"[error] {e}"]}
+        return {"diagnoses_b": [f"[error] {e}"], "reasoning_b": ""}
 
 
 def search_both(state: DiagnoseState) -> dict:
@@ -87,7 +94,12 @@ def search_both(state: DiagnoseState) -> dict:
 
 
 def _safe_search(diagnoses: list[str], k: int = 3) -> list[ICD10Match]:
-    """Run search_icd10, returning [] on error or empty/error diagnoses."""
+    """Run search_icd10, returning [] on error or when all diagnoses are invalid.
+
+    Filters out empty strings and ``[error]``-prefixed entries (emitted by
+    ``diagnose_a``/``diagnose_b`` when the model call fails) so that error
+    placeholders don't pollute the vector search results.
+    """
     valid = [d for d in diagnoses if d and not d.startswith("[error]")]
     if not valid:
         return []
@@ -140,7 +152,14 @@ def run_diagnose(body: DiagnoseRequest) -> DualDiagnoseResponse:
     """
     started = time.time()
     result = _graph.invoke(
-        {"text": body.text, "k": body.k, "diagnoses_a": [], "diagnoses_b": []}  # type: ignore
+        {
+            "text": body.text,
+            "k": body.k,
+            "diagnoses_a": [],
+            "diagnoses_b": [],
+            "reasoning_a": "",
+            "reasoning_b": "",
+        }  # type: ignore
     )
     elapsed = time.time() - started
 
@@ -150,11 +169,13 @@ def run_diagnose(body: DiagnoseRequest) -> DualDiagnoseResponse:
                 model=MODEL_A,
                 diagnoses=result.get("diagnoses_a", []),
                 codes=result.get("codes_a", []),
+                reasoning=result.get("reasoning_a", ""),
             ),
             DiagnosisResult(
                 model=MODEL_B,
                 diagnoses=result.get("diagnoses_b", []),
                 codes=result.get("codes_b", []),
+                reasoning=result.get("reasoning_b", ""),
             ),
         ],
         elapsed_s=round(elapsed, 2),

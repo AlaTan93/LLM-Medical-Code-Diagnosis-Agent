@@ -1,7 +1,7 @@
 """Shared medical pipeline functions used by ``/code`` and ``/diagnose``.
 
 - :func:`diagnose` — forwards clinical text to a medical model and returns
-  1-10 independent diagnoses.
+  1-10 independent diagnoses plus the model's clinical reasoning.
 - :func:`search_icd10` — batch-embeds multiple diagnosis queries and runs
   pgvector cosine-similarity searches over billable ICD-10-CM codes.
 """
@@ -20,14 +20,17 @@ from medicoder.schemas import ICD10Match
 _MAX_DIAGNOSES = 10
 
 _DIAGNOSE_SYSTEM = (
-    "Produce concise, ICD-10 type diagnostic sentences describing the "
-    "patient's conditions.\n"
-    "Output a JSON object with a \"diagnoses\" array containing 1-10 "
-    "diagnosis strings. Do NOT include ICD-10 codes, code numbers, "
-    "explanations, markdown, or 'patient has'.\n\n"
+    "Analyze the patient's clinical presentation, then produce diagnoses.\n"
+    "Output a JSON object with two fields:\n"
+    '- "reasoning": Your brief clinical reasoning (analysis of symptoms, '
+    "findings, and conclusions).\n"
+    '- "diagnoses": An array of 1-10 concise, ICD-10 type diagnostic '
+    "sentences.\n"
+    "Do NOT include ICD-10 codes, code numbers, or 'patient has'.\n\n"
     "Example:\n"
-    '{"diagnoses": ["Type 2 diabetes mellitus without complications", '
-    '"Essential (primary) hypertension"]}'
+    '{"reasoning": "The patient has a history of opioid dependence and is '
+    'currently in remission after detoxification. No acute withdrawal '
+    'symptoms are noted.", "diagnoses": ["Opioid dependence, in remission"]}'
 )
 
 _BOXED_RE = re.compile(r"\\boxed\{(.*)\}", re.DOTALL)
@@ -38,10 +41,18 @@ _BULLET_RE = re.compile(r"^[-*]\s*")
 class DiagnosisOutput(BaseModel):
     """Pydantic schema for validating JSON diagnosis output from models.
 
-    Coerces the model's response into a clean list of diagnosis strings,
-    filtering out empty entries and capping at :data:`_MAX_DIAGNOSES`.
+    Captures both the model's clinical reasoning and its resulting
+    diagnoses in a structured format.  The ``reasoning`` field makes the
+    model's thought process observable — useful for debugging, the critic
+    agent's context, and evaluation transparency.
+
+    Attributes:
+        reasoning: The model's clinical reasoning (empty string if the
+            model didn't include it).
+        diagnoses: 1-10 clean diagnosis strings.
     """
 
+    reasoning: str = ""
     diagnoses: list[str]
 
     @field_validator("diagnoses", mode="after")
@@ -53,20 +64,26 @@ class DiagnosisOutput(BaseModel):
 def _extract_json(raw: str) -> dict | None:
     """Try to extract a JSON object from raw model output.
 
-    Attempts, in order:
-    1. Direct ``json.loads`` on the full text.
-    2. Extraction from a markdown code fence (``\\`\\`\\`json … \\`\\`\\```).
-    3. Substring from the first ``{`` to the last ``}``.
+    Models don't always return clean JSON — some wrap it in markdown
+    fences, prepend prose, or embed it mid-sentence.  This function
+    tries three strategies in order of decreasing strictness:
 
-    Returns ``None`` if no valid JSON is found.
+    1. Direct ``json.loads`` on the full text (best case).
+    2. Extraction from a ``\\`\\`\\`json`` markdown code fence.
+    3. Substring from the first ``{`` to the last ``}`` (catches JSON
+       embedded after prose or thinking blocks).
+
+    Returns ``None`` if no valid JSON object is found.
     """
     raw = raw.strip()
 
+    # Strategy 1 — direct parse.
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
         pass
 
+    # Strategy 2 — extract from markdown code fences.
     if "```" in raw:
         for part in raw.split("```"):
             part = part.strip()
@@ -78,6 +95,7 @@ def _extract_json(raw: str) -> dict | None:
                 except json.JSONDecodeError:
                     continue
 
+    # Strategy 3 — grab the outermost { … } substring.
     first = raw.find("{")
     last = raw.rfind("}")
     if first != -1 and last > first:
@@ -121,20 +139,27 @@ def _parse_diagnoses(raw: str) -> list[str]:
     return lines[:_MAX_DIAGNOSES]
 
 
-def diagnose(text: str, model: str) -> list[str]:
-    """Forward clinical text to a medical model for independent diagnoses.
+def diagnose(text: str, model: str) -> tuple[list[str], str]:
+    """Forward clinical text to a medical model for diagnoses and reasoning.
 
-    Asks the model for JSON output (``{"diagnoses": [...]}``) and validates
-    it with :class:`DiagnosisOutput`.  Falls back to :func:`_parse_diagnoses`
-    (line-based regex parsing) when the model doesn't produce valid JSON.
+    Pipeline: system prompt (JSON format) → model call → strip thinking →
+    JSON extraction → Pydantic validation → fallback to regex parsing.
+
+    The system prompt asks the model to output JSON with both a
+    ``reasoning`` field (clinical explanation) and a ``diagnoses`` array.
+    When the model complies, :class:`DiagnosisOutput` validates the
+    structure and cleans entries.  When it doesn't (e.g. plain-text
+    output), :func:`_parse_diagnoses` provides a regex-based fallback so
+    the pipeline degrades gracefully (reasoning will be empty in that case).
 
     Args:
         text: Clinical text or patient description.
         model: LiteLLM alias for the medical model (e.g. ``ii-medical-q8``).
 
     Returns:
-        A list of 0-_MAX_DIAGNOSES diagnosis strings (thinking blocks
-        stripped, output parsed and validated).
+        A ``(diagnoses, reasoning)`` tuple where *diagnoses* is a list of
+        0-_MAX_DIAGNOSES strings and *reasoning* is the model's clinical
+        explanation (empty string on fallback).
     """
     messages = [
         {"role": "system", "content": _DIAGNOSE_SYSTEM},
@@ -142,14 +167,18 @@ def diagnose(text: str, model: str) -> list[str]:
     ]
     raw = proxy.chat_completion(model, messages)
 
+    # Try structured JSON first (preferred path for models that follow
+    # the system prompt's format instructions).
     data = _extract_json(raw)
     if data is not None:
         try:
-            return DiagnosisOutput(**data).diagnoses
+            result = DiagnosisOutput(**data)
+            return result.diagnoses, result.reasoning
         except (ValidationError, TypeError):
             pass
 
-    return _parse_diagnoses(raw)
+    # Fallback: line-based regex parsing for models that ignore JSON.
+    return _parse_diagnoses(raw), ""
 
 
 def search_icd10(queries: list[str], k: int = 3) -> list[ICD10Match]:
@@ -170,10 +199,15 @@ def search_icd10(queries: list[str], k: int = 3) -> list[ICD10Match]:
     if not queries:
         return []
 
+    # Batch-embed all queries in one LiteLLM call to amortise network latency.
     vectors = proxy.embed(queries)
 
+    # Deduplicate by code: when multiple queries match the same code, keep
+    # the one with the highest similarity score.
     seen: dict[str, ICD10Match] = {}
     with get_pool().connection() as conn:
+        # Widen the HNSW search frontier for better recall at the cost of
+        # a small latency increase (default is 40; 200 is near-exact).
         conn.execute("SET LOCAL hnsw.ef_search = 200")
         for vec in vectors:
             query_vec = json.dumps(vec)
@@ -197,4 +231,5 @@ def search_icd10(queries: list[str], k: int = 3) -> list[ICD10Match]:
                         similarity=sim,
                     )
 
+    # Return results sorted by similarity descending (best matches first).
     return sorted(seen.values(), key=lambda m: m.similarity, reverse=True)
