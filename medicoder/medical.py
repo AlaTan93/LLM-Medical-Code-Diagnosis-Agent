@@ -45,6 +45,27 @@ _DIAGNOSE_SYSTEM_CONCISE = (
     "Example: {\"diagnoses\": [\"Opioid dependence, in remission\"]}"
 )
 
+_CRITIC_SYSTEM = (
+    "You are a senior clinical coding reviewer. Two independent medical "
+    "models analyzed the same patient case and produced different "
+    "diagnoses.\n\n"
+    "Carefully analyze where the models agree and disagree:\n"
+    "- Which diagnoses are well-supported by the clinical text?\n"
+    "- Are there missing diagnoses the models overlooked?\n"
+    "- Are there redundant or incorrect diagnoses?\n"
+    "- Which specific ICD-10 codes are most appropriate?\n\n"
+    "Reason freely and thoroughly.  After your analysis, output a JSON "
+    "object with these fields:\n"
+    '- "reasoning": Your detailed clinical reasoning\n'
+    '- "diagnoses": Your reconciled list of 1-10 concise ICD-10 type '
+    'diagnostic sentences\n'
+    '- "queries": Search terms to find ICD-10 codes for any new or changed '
+    'diagnoses (these will be embedded and matched against the code '
+    'database)\n'
+    '- "done": true if you are confident in your reconciled diagnoses, '
+    'false if you need another round of review\n'
+)
+
 _BOXED_RE = re.compile(r"\\boxed\{(.*)\}", re.DOTALL)
 _NUM_RE = re.compile(r"^[\d]+[.)]?\s*")
 _BULLET_RE = re.compile(r"^[-*]\s*")
@@ -71,6 +92,35 @@ class DiagnosisOutput(BaseModel):
     @classmethod
     def clean_diagnoses(cls, v: list[str]) -> list[str]:
         return [d.strip() for d in v if d.strip()][:_MAX_DIAGNOSES]
+
+
+class CriticOutput(BaseModel):
+    """Pydantic schema for validating debate-critic JSON output.
+
+    The critic reconciles two models' diagnoses and produces its own
+    reasoning, reconciled diagnoses, search queries, and a done flag.
+
+    Attributes:
+        reasoning: The critic's clinical reasoning.
+        diagnoses: 1-10 reconciled diagnosis strings.
+        queries: Free-form search terms for ICD-10 vector search.
+        done: Whether the critic is confident (``True`` ends the loop).
+    """
+
+    reasoning: str = ""
+    diagnoses: list[str]
+    queries: list[str] = []
+    done: bool = False
+
+    @field_validator("diagnoses", mode="after")
+    @classmethod
+    def clean_diagnoses(cls, v: list[str]) -> list[str]:
+        return [d.strip() for d in v if d.strip()][:_MAX_DIAGNOSES]
+
+    @field_validator("queries", mode="after")
+    @classmethod
+    def clean_queries(cls, v: list[str]) -> list[str]:
+        return [q.strip() for q in v if q.strip()][:_MAX_DIAGNOSES]
 
 
 def _extract_json(raw: str) -> dict | None:
@@ -231,6 +281,139 @@ def diagnose(
     # All retries exhausted.
     print(f"[diagnose] all {_MAX_RETRIES} attempts failed; returning empty")
     return [], ""
+
+
+def _build_critic_context(
+    text: str,
+    model_a: str,
+    diagnoses_a: list[str],
+    codes_a: list[ICD10Match],
+    reasoning_a: str,
+    model_b: str,
+    diagnoses_b: list[str],
+    codes_b: list[ICD10Match],
+    reasoning_b: str,
+    previous_rounds: list[dict],
+) -> str:
+    """Build the user message giving the critic both models' context.
+
+    Renders a structured summary of each model's diagnoses, reasoning, and
+    ICD-10 code matches, plus any previous critic rounds so the critic can
+    iterate rather than repeat itself.
+    """
+    lines: list[str] = [f"Patient: {text}\n"]
+
+    def _model_section(name: str, dx: list[str], codes: list[ICD10Match],
+                       reasoning: str) -> list[str]:
+        sect = [f"{name} diagnoses:"]
+        for i, d in enumerate(dx, 1):
+            sect.append(f"  {i}. {d}")
+        if reasoning:
+            sect.append(f"{name} reasoning: {reasoning}")
+        sect.append(f"{name} ICD-10 codes:")
+        if codes:
+            for c in codes:
+                sect.append(f"  {c.code} - {c.short_desc} "
+                            f"(similarity {c.similarity:.2f})")
+        else:
+            sect.append("  (none)")
+        return sect
+
+    lines.extend(_model_section(f"Model A ({model_a})", diagnoses_a,
+                                codes_a, reasoning_a))
+    lines.append("")
+    lines.extend(_model_section(f"Model B ({model_b})", diagnoses_b,
+                                codes_b, reasoning_b))
+
+    if previous_rounds:
+        lines.append("\nPrevious critic rounds:")
+        for r in previous_rounds:
+            lines.append(f"  Round {r['round']}:")
+            if r.get("reasoning"):
+                lines.append(f"    Reasoning: {r['reasoning']}")
+            lines.append(f"    Diagnoses: {', '.join(r['diagnoses'])}")
+            if r.get("codes"):
+                code_strs = [c["code"] for c in r["codes"]]
+                lines.append(f"    Codes: {', '.join(code_strs)}")
+
+    return "\n".join(lines)
+
+
+def diagnose_critic(
+    text: str,
+    model_a: str,
+    diagnoses_a: list[str],
+    codes_a: list[ICD10Match],
+    reasoning_a: str,
+    model_b: str,
+    diagnoses_b: list[str],
+    codes_b: list[ICD10Match],
+    reasoning_b: str,
+    previous_rounds: list[dict],
+    critic_model: str,
+    *,
+    temperature: float = 0.25,
+    max_tokens: int = 8192,
+) -> tuple[list[str], list[str], str, bool]:
+    """Run the debate-critic agent to reconcile two models' diagnoses.
+
+    The critic receives both models' diagnoses, ICD-10 codes, reasoning,
+    and any previous round history, then produces its own reconciled
+    diagnoses plus optional search queries.
+
+    Uses a generous token budget (8192) to allow the critic to reason
+    freely before producing structured JSON output.
+
+    Args:
+        text: Original clinical text.
+        model_a: LiteLLM alias for model A.
+        diagnoses_a: Diagnoses from model A.
+        codes_a: ICD-10 matches for model A.
+        reasoning_a: Clinical reasoning from model A.
+        model_b: LiteLLM alias for model B.
+        diagnoses_b: Diagnoses from model B.
+        codes_b: ICD-10 matches for model B.
+        reasoning_b: Clinical reasoning from model B.
+        previous_rounds: Prior critic rounds (list of dicts with keys
+            ``round``, ``reasoning``, ``diagnoses``, ``codes``).
+        critic_model: LiteLLM alias for the critic model.
+        temperature: Sampling temperature (default 0.25 — moderate
+            creativity for reconciliation).
+        max_tokens: Token budget (default 8192).
+
+    Returns:
+        A ``(diagnoses, queries, reasoning, done)`` tuple.  On parse
+        failure, ``diagnoses`` is empty and ``done`` is ``False``.
+    """
+    user_msg = _build_critic_context(
+        text, model_a, diagnoses_a, codes_a, reasoning_a,
+        model_b, diagnoses_b, codes_b, reasoning_b,
+        previous_rounds,
+    )
+    messages = [
+        {"role": "system", "content": _CRITIC_SYSTEM},
+        {"role": "user", "content": user_msg},
+    ]
+
+    try:
+        raw = proxy.chat_completion(
+            critic_model, messages,
+            temperature=temperature, max_tokens=max_tokens,
+        )
+    except Exception as e:
+        print(f"[critic] model call failed: {e}")
+        return [], [], "", False
+
+    data = _extract_json(raw)
+    if data is not None:
+        try:
+            result = CriticOutput(**data)
+            return result.diagnoses, result.queries, result.reasoning, result.done
+        except (ValidationError, TypeError):
+            pass
+
+    diagnoses = _parse_diagnoses(raw)
+    return diagnoses, [], "", False
 
 
 def search_icd10(queries: list[str], k: int = 3) -> list[ICD10Match]:

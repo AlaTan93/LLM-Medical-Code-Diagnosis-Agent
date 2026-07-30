@@ -222,7 +222,11 @@ Runs two medical models in parallel and searches both models' diagnoses for
 matching ICD-10 codes. Each model produces 1–10 independent diagnoses; each
 diagnosis is independently searched for its top-k matching billable codes
 (default k=3, configurable), then results are deduplicated and sorted by
-similarity. Uses a LangGraph `StateGraph` with a fan-out / fan-in topology:
+similarity. When the two models disagree (different top-1 code or different
+diagnosis count), a **debate-critic loop** reconciles their outputs over up
+to `MAX_CRITIC_ROUNDS` rounds.
+
+Uses a LangGraph `StateGraph`:
 
 ```
 START
@@ -233,12 +237,54 @@ START
   │                                          ↓
   │                                 search_both (k=3 per dx)
   │                                          ↓
-                                           END
+  │                                  _should_critic?
+  │                                     ╱        ╲
+  │                              agree             disagree
+  │                                   │               │
+  │                                  END     critic_think → critic_search
+  │                                                      ╱          ╲
+  │                                             _should_continue?
+  │                                                 ╱          ╲
+  │                                           loop              end
+  │                                              │                │
+  │                                       critic_think           END
+  │                                         (next round)
+END
 ```
 
 The graph topology guarantees both models are called before the search step
 runs. Both models run concurrently, so wall-clock time is roughly
-max(model_a, model_b) + search.
+max(model_a, model_b) + search. If the critic triggers, add ~60–120s per
+round (the critic reuses `ii-medical-q8`, already loaded in VRAM).
+
+### Debate-critic loop
+
+When the two models disagree, the critic agent (ii-medical-q8, temp=0.25,
+8192 tokens) receives both models' diagnoses, ICD-10 codes, reasoning, and
+any previous round history. It produces its own reconciled diagnoses plus
+optional search queries that are embedded and matched against the ICD-10
+code database. The critic signals `done: true` when confident; otherwise the
+loop continues up to `MAX_CRITIC_ROUNDS`.
+
+The critic prompt is designed to give the model freedom to reason before
+producing structured output — analysis instructions come first, the JSON
+format constraint comes last.
+
+Configure via environment variable (`.env`):
+
+| Variable | Default | Description |
+|---|---|---|
+| `MAX_CRITIC_ROUNDS` | `2` | Max reconciliation rounds (0 = disabled). |
+
+Disable per-request with `"enable_critic": false`:
+
+```bash
+curl -X POST http://localhost:8000/diagnose \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"...","enable_critic":false}'
+```
+
+### Usage
 
 ```bash
 curl -X POST http://localhost:8000/diagnose \
@@ -246,19 +292,21 @@ curl -X POST http://localhost:8000/diagnose \
   -d '{"text":"Patient has type 2 diabetes mellitus without complications"}'
 ```
 
-Optional `k` field overrides the codes-per-diagnosis (default `3`):
+Optional `k` field overrides codes-per-diagnosis (default `3`):
 
 ```bash
 curl -X POST http://localhost:8000/diagnose \
   -H 'Content-Type: application/json' \
-  -d '{"text":"Patient has type 2 diabetes mellitus without complications","k":5}'
+  -d '{"text":"...","k":5}'
 ```
 
-Returns `{"results","elapsed_s"}` where `results` is a list of two
-`{model, diagnoses, codes}` entries (one per medical model, in fixed order).
-Each `diagnoses` is a list of 1–10 diagnosis sentences, and each `codes` list
-carries the deduplicated billable ICD-10 matches (top-k per diagnosis, sorted
-by similarity).
+Returns `{"results", "critic_triggered", "critic_rounds", "elapsed_s"}`:
+
+- `results` — list of two `{model, diagnoses, codes, reasoning}` entries
+  (one per medical model, in fixed order).
+- `critic_triggered` — `true` if the debate-critic loop ran.
+- `critic_rounds` — full trace of each reconciliation round (empty if not
+  triggered). Each round has `{round, reasoning, diagnoses, queries, codes, done}`.
 
 ## Data loading
 
@@ -369,8 +417,8 @@ docker/postgres/02-embedding.sql pgvector embedding column + HNSW index (1024-di
 docker/litellm/config.yaml       LiteLLM alias -> upstream routing + DB logging
 docker/litellm/log_callback.py   custom callback -> llm_call_log (prompts/thinking/output/tools)
 medicoder/proxy.py               shared LiteLLM client: chat_completion(), embed(), strip_thinking()
-medicoder/medical.py             shared pipeline functions: diagnose(), search_icd10()
-medicoder/schemas.py             Pydantic models (ICD10Code, TestRequest/Response, CodeRequest/Response, DiagnoseRequest/Response, ToolResult)
+medicoder/medical.py             shared pipeline functions: diagnose(), diagnose_critic(), search_icd10()
+medicoder/schemas.py             Pydantic models (ICD10Code, TestRequest/Response, CodeRequest/Response, DiagnoseRequest/Response, CriticRound, ToolResult)
 medicoder/db/connect.py          shared CLI Postgres connection (retried)
 medicoder/db/load_icd10.py       fixed-width -> COPY loader
 medicoder/db/embed_icd10.py      idempotent bulk embedder (bge-m3 via LiteLLM)
@@ -378,7 +426,7 @@ medicoder/db/pool.py             psycopg connection pool (lifespan-managed)
 medicoder/routes/icd10.py        /codes endpoints
 medicoder/routes/llm.py          POST /test/{model} — call a LiteLLM alias
 medicoder/routes/code.py         POST /code — deterministic pipeline (diagnose + search_icd10)
-medicoder/routes/diagnose.py     POST /diagnose — LangGraph StateGraph fan-out (2 models + search)
+medicoder/routes/diagnose.py     POST /diagnose — LangGraph StateGraph (2 models + search + debate-critic loop)
 main.py                          FastAPI app + lifespan + router wiring
 models.toml                      registry models for the ollama-init sidecar
 .vscode/{launch,tasks,extensions}.json  VSCode container debugging

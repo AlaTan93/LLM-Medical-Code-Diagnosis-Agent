@@ -125,10 +125,13 @@ class DiagnoseRequest(BaseModel):
     Attributes:
         text: Clinical text or patient description to diagnose.
         k: Maximum ICD-10 codes to return per diagnosis (default 3).
+        enable_critic: Whether to run the debate-critic reconciliation loop
+            when the two models disagree (default True).
     """
 
     text: str
     k: int = 3
+    enable_critic: bool = True
 
 
 class DiagnosisResult(BaseModel):
@@ -148,14 +151,40 @@ class DiagnosisResult(BaseModel):
     reasoning: str = ""
 
 
+class CriticRound(BaseModel):
+    """One round of the debate-critic reconciliation loop.
+
+    Attributes:
+        round: Zero-indexed round number.
+        reasoning: The critic's clinical reasoning for this round.
+        diagnoses: The critic's reconciled diagnoses (1-10 entries).
+        queries: Free-form search terms the critic suggested for finding
+            ICD-10 codes (used alongside diagnoses for vector search).
+        codes: ICD-10 matches found for this round's diagnoses + queries.
+        done: Whether the critic signalled confidence (``true`` ends the loop).
+    """
+
+    round: int
+    reasoning: str = ""
+    diagnoses: list[str]
+    queries: list[str] = []
+    codes: list[ICD10Match] = []
+    done: bool = False
+
+
 class DualDiagnoseResponse(BaseModel):
     """Response from the dual-diagnosis pipeline.
 
     Attributes:
         results: One :class:`DiagnosisResult` per medical model, in the order
-            the models are configured (ii-medical-q8, gemma-4-medical-q6).
+            the models are configured (ii-medical-q8, deepseek-r1-medical-cot).
+        critic_triggered: Whether the debate-critic loop ran (models disagreed).
+        critic_rounds: Full trace of each critic reconciliation round (empty
+            if the critic was not triggered or disabled).
         elapsed_s: Wall-clock seconds for the entire pipeline.
     """
 
     results: list[DiagnosisResult]
+    critic_triggered: bool = False
+    critic_rounds: list[CriticRound] = []
     elapsed_s: float

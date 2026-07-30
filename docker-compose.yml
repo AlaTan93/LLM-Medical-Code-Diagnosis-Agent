@@ -90,6 +90,8 @@ services:
       ICD10_FILE: /app/icd10cm_order_2026.txt
       # Points at the local LiteLLM proxy (alias -> upstream LLM).
       LLM_BASE_URL: ${LLM_BASE_URL:-http://litellm:4000/v1}
+      # Max debate-critic reconciliation rounds on /diagnose (0 = disabled).
+      MAX_CRITIC_ROUNDS: ${MAX_CRITIC_ROUNDS:-2}
       # DeepAgent models are reached via LangChain's `openai:` provider, which
       # reads OPENAI_BASE_URL / OPENAI_API_KEY. LiteLLM enforces no key, so a
       # dummy value is fine; base URL mirrors LLM_BASE_URL.

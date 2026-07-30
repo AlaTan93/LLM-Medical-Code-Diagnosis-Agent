@@ -3,7 +3,8 @@
 Runs on the host outside the container. Loads test cases from
 ``data/icd10_cm_cases.json``, calls the ``/diagnose`` endpoint for each case,
 and reports top-1 through top-3 accuracy, recall, precision@GT, F1, diagnosis
-count metrics, and model agreement.
+count metrics, model agreement, and critic recall/precision/F1 (over the
+subset of cases where the debate-critic was triggered).
 
 Usage::
 
@@ -46,7 +47,7 @@ def load_cases(path: str = CASES_PATH) -> list[dict]:
         return json.load(f)["cases"]
 
 
-def call_diagnose(text: str, timeout: float = 300) -> dict:
+def call_diagnose(text: str, timeout: float = 600) -> dict:
     """POST a medical note to /diagnose and return the parsed response."""
     payload = json.dumps({"text": text}).encode()
     req = urllib.request.Request(
@@ -140,6 +141,43 @@ def _evaluate_case(case: dict, index: int, total: int) -> dict | None:
     if reasoning_b:
         print(f"{'':9s}    \"{reasoning_b[:120]}\"")
 
+    # Critic results.
+    critic_triggered = result.get("critic_triggered", False)
+    critic_rounds = result.get("critic_rounds", [])
+    critic_codes: list[str] = []
+    critic_dx: list[str] = []
+    critic_reasoning = ""
+    rec_c: float = 0.0
+    prec_c: float = 0.0
+    hit_1c = False
+    hit_2c = False
+    hit_3c = False
+    if critic_triggered and critic_rounds:
+        final = critic_rounds[-1]
+        critic_codes = [c["code"] for c in final.get("codes", [])]
+        critic_dx = final.get("diagnoses", [])
+        critic_reasoning = final.get("reasoning", "")
+
+        # Critic metrics (same formulas as models A/B).
+        set_c = set(critic_codes)
+        tp_c = set_c & gt
+        rec_c = len(tp_c) / len(gt) if gt else 0.0
+        dx_cnt_c = len(critic_dx)
+        denom_c = max(dx_cnt_c, gt_cnt)
+        prec_c = len(tp_c) / denom_c if denom_c else 0.0
+        hit_1c = bool(critic_codes) and critic_codes[0] in gt
+        hit_2c = any(c in gt for c in critic_codes[:2])
+        hit_3c = any(c in gt for c in critic_codes[:3])
+
+        mark_c = "+" if hit_2c else "-"
+        c_str = ", ".join(critic_codes[:5]) or "(none)"
+        n_rounds = len(critic_rounds)
+        print(f"{'':9s}C [{mark_c}] {dx_cnt_c}dx  {c_str}  "
+              f"R:{rec_c:.0%} P:{prec_c:.0%}  "
+              f"({n_rounds} round{'s' if n_rounds != 1 else ''})")
+        if critic_reasoning:
+            print(f"{'':9s}    \"{critic_reasoning[:120]}\"")
+
     return {
         "case": index + 1,
         "ground_truth": gt_raw,
@@ -167,6 +205,19 @@ def _evaluate_case(case: dict, index: int, total: int) -> dict | None:
             "precision": round(prec_b, 4),
         },
         "agreement": same_top1,
+        "critic": {
+            "triggered": critic_triggered,
+            "rounds": len(critic_rounds),
+            "diagnoses": critic_dx,
+            "dx_count": len(critic_dx),
+            "codes": critic_codes,
+            "reasoning": critic_reasoning,
+            "top1_hit": hit_1c,
+            "top2_hit": hit_2c,
+            "top3_hit": hit_3c,
+            "recall": round(rec_c, 4),
+            "precision": round(prec_c, 4),
+        },
     }
 
 
@@ -223,8 +274,26 @@ def _compute_summary(details: list[dict]) -> dict:
 
     agree = sum(1 for d in details if d["agreement"])
 
+    # Critic metrics — averaged only over cases where the critic was triggered.
+    critic_details = [d for d in details if d["critic"]["triggered"]]
+    n_critic = len(critic_details)
+
+    if n_critic > 0:
+        top1_c = sum(1 for d in critic_details if d["critic"]["top1_hit"])
+        top2_c = sum(1 for d in critic_details if d["critic"]["top2_hit"])
+        top3_c = sum(1 for d in critic_details if d["critic"]["top3_hit"])
+        avg_rec_c = sum(d["critic"]["recall"] for d in critic_details) / n_critic
+        avg_prec_c = sum(d["critic"]["precision"] for d in critic_details) / n_critic
+        denom_c = avg_rec_c + avg_prec_c
+        f1_c = 2 * avg_rec_c * avg_prec_c / denom_c if denom_c else 0.0
+        avg_dx_c = sum(d["critic"]["dx_count"] for d in critic_details) / n_critic
+    else:
+        top1_c = top2_c = top3_c = 0
+        avg_rec_c = avg_prec_c = f1_c = avg_dx_c = 0.0
+
     return {
         "total": total,
+        "n_critic": n_critic,
         "top1_a": top1_a, "top1_b": top1_b,
         "top2_a": top2_a, "top2_b": top2_b,
         "top3_a": top3_a, "top3_b": top3_b,
@@ -236,6 +305,9 @@ def _compute_summary(details: list[dict]) -> dict:
         "over_a": over_a, "over_b": over_b,
         "under_a": under_a, "under_b": under_b,
         "agree": agree,
+        "top1_c": top1_c, "top2_c": top2_c, "top3_c": top3_c,
+        "avg_rec_c": avg_rec_c, "avg_prec_c": avg_prec_c, "f1_c": f1_c,
+        "avg_dx_c": avg_dx_c,
     }
 
 
@@ -252,7 +324,7 @@ def _build_rows(m: dict) -> list[tuple[str, str, str]]:
     fraction (e.g. ``"3/10"``) and *rate* is a formatted percentage or value.
     """
     t = m["total"]
-    return [
+    rows = [
         (f"Top-1  ({MODEL_A})", f"{m['top1_a']}/{t}", f"{m['top1_a'] / t:.1%}"),
         (f"Top-1  ({MODEL_B})", f"{m['top1_b']}/{t}", f"{m['top1_b'] / t:.1%}"),
         (f"Top-2  ({MODEL_A})", f"{m['top2_a']}/{t}", f"{m['top2_a'] / t:.1%}"),
@@ -277,6 +349,21 @@ def _build_rows(m: dict) -> list[tuple[str, str, str]]:
         ("Agreement (same top-1)", f"{m['agree']}/{t}", f"{m['agree'] / t:.1%}"),
     ]
 
+    # Critic rows (only when the critic triggered at least once).
+    nc = m.get("n_critic", 0)
+    if nc > 0:
+        rows.extend([
+            (f"Top-1  (Critic, {nc} trig.)", f"{m['top1_c']}/{nc}", f"{m['top1_c'] / nc:.1%}"),
+            (f"Top-2  (Critic, {nc} trig.)", f"{m['top2_c']}/{nc}", f"{m['top2_c'] / nc:.1%}"),
+            (f"Top-3  (Critic, {nc} trig.)", f"{m['top3_c']}/{nc}", f"{m['top3_c'] / nc:.1%}"),
+            (f"Recall  (Critic, {nc} trig.)", "", f"{m['avg_rec_c']:.1%}"),
+            (f"Prec@GT (Critic, {nc} trig.)", "", f"{m['avg_prec_c']:.1%}"),
+            (f"F1  (Critic, {nc} trig.)", "", f"{m['f1_c']:.1%}"),
+            (f"Avg diagnoses  (Critic)", "", f"{m['avg_dx_c']:.1f}"),
+        ])
+
+    return rows
+
 
 def _print_summary(m: dict) -> None:
     """Print the formatted summary table to stdout."""
@@ -297,7 +384,7 @@ def _print_summary(m: dict) -> None:
 def _build_metrics_json(m: dict) -> dict:
     """Convert summary metrics into the JSON-serialisable metrics dict."""
     t = m["total"]
-    return {
+    metrics = {
         "top1_a": m["top1_a"], "top1_a_pct": round(m["top1_a"] / t, 4),
         "top1_b": m["top1_b"], "top1_b_pct": round(m["top1_b"] / t, 4),
         "top2_a": m["top2_a"], "top2_a_pct": round(m["top2_a"] / t, 4),
@@ -321,6 +408,23 @@ def _build_metrics_json(m: dict) -> dict:
         "under_dx_b": m["under_b"], "under_dx_b_pct": round(m["under_b"] / t, 4),
         "agreement": m["agree"], "agreement_pct": round(m["agree"] / t, 4),
     }
+
+    # Critic metrics (only when triggered at least once).
+    nc = m.get("n_critic", 0)
+    if nc > 0:
+        metrics["critic_triggered"] = nc
+        metrics["critic_top1"] = m["top1_c"]
+        metrics["critic_top1_pct"] = round(m["top1_c"] / nc, 4)
+        metrics["critic_top2"] = m["top2_c"]
+        metrics["critic_top2_pct"] = round(m["top2_c"] / nc, 4)
+        metrics["critic_top3"] = m["top3_c"]
+        metrics["critic_top3_pct"] = round(m["top3_c"] / nc, 4)
+        metrics["critic_recall"] = round(m["avg_rec_c"], 4)
+        metrics["critic_precision"] = round(m["avg_prec_c"], 4)
+        metrics["critic_f1"] = round(m["f1_c"], 4)
+        metrics["critic_avg_dx"] = round(m["avg_dx_c"], 2)
+
+    return metrics
 
 
 def _save_json(path: str, m: dict, details: list[dict]) -> None:
