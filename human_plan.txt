@@ -56,4 +56,8 @@ Ask later if Terraform AWS deployment is allowed. (Data may be synthetically gen
 output1.json is a prompt without mentioning ICD-10
 output_icd10.json mentions ICD-10 as part of the prompt
 
-Bringing in Gemma seems to cause trouble.
+Bringing in Gemma seems to cause trouble. Trying to use MedGemma?
+
+One vector similarity search involved the use of bge-m3, a 1024-dim embedding model. 
+But vector similarity search using this model was failing to rank Erysipelas and Erysipeloid
+similarly despite having the same prefix. So, was thinking of switching to zembed-1.

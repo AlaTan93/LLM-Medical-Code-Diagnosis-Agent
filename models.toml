@@ -15,6 +15,9 @@ name = "hf.co/rwibawa/DeepSeek-R1-Medical-COT:Q4_K_M"
 [[model]]
 name = "hf.co/Intelligent-Internet/II-Medical-8B-1706-GGUF:Q8_0"
 
+[[model]]
+name = "hf.co/unsloth/medgemma-27b-text-it-GGUF:Q4_K_S"
+
 #[[model]]
 #name = "hf.co/qaootkcx/qwen35-9b-medical:Q4_K_M"
 
