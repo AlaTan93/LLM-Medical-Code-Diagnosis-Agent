@@ -4,7 +4,9 @@ Runs on the host outside the container. Loads test cases from
 ``data/icd10_cm_cases.json``, calls the ``/diagnose`` endpoint for each case,
 and reports top-1 through top-3 accuracy, recall, precision@GT, F1, diagnosis
 count metrics, model agreement, and critic recall/precision/F1 (over the
-subset of cases where the debate-critic was triggered).
+subset of cases where the debate-critic was triggered).  Category-level
+(3-char prefix) recall, precision, and F1 are reported alongside exact-match
+metrics to distinguish "right disease, wrong specificity" from total misses.
 
 Usage::
 
@@ -23,7 +25,7 @@ import urllib.request
 BASE_URL = "http://localhost:8000"
 CASES_PATH = "data/icd10_cm_cases.json"
 
-MODEL_A = "ii-medical-q8"
+MODEL_A = "medgemma-27b-q4_k_s"
 MODEL_B = "deepseek-r1-medical-cot"
 
 
@@ -39,6 +41,72 @@ def normalize(code: str) -> str:
     Ground truth uses standard notation with periods.
     """
     return code.replace(".", "")
+
+
+def _cat_recall(gt: set[str], codes: list[str]) -> float:
+    """Fraction of GT codes whose 3-char category appears in *codes*."""
+    if not gt:
+        return 0.0
+    pred_cats = {c[:3] for c in codes}
+    return sum(1 for g in gt if g[:3] in pred_cats) / len(gt)
+
+
+def _cat_precision(gt: set[str], codes: list[str]) -> float:
+    """Fraction of returned codes whose 3-char category matches a GT code."""
+    if not codes:
+        return 0.0
+    gt_cats = {c[:3] for c in gt}
+    return sum(1 for c in codes if c[:3] in gt_cats) / len(codes)
+
+
+def _f1(recall: float, precision: float) -> float:
+    """Harmonic mean of recall and precision (0 when both are 0)."""
+    denom = recall + precision
+    return 2 * recall * precision / denom if denom else 0.0
+
+
+def _model_metrics(gt: set[str], codes: list[str], dx_cnt: int,
+                   gt_cnt: int) -> dict:
+    """Compute all per-case metrics for one model's codes.
+
+    Calculates top-1/2/3 hits, exact recall/precision, and category-level
+    (3-char prefix) recall/precision in one pass.
+
+    Args:
+        gt: Set of normalised ground-truth codes.
+        codes: List of normalised predicted codes (ranked by similarity).
+        dx_cnt: Number of diagnoses the model produced.
+        gt_cnt: Number of ground-truth codes.
+
+    Returns:
+        A dict with keys: ``top1_hit``, ``top2_hit``, ``top3_hit``,
+        ``recall``, ``precision``, ``cat_recall``, ``cat_precision``
+        (all floats rounded to 4 dp).
+    """
+    tp = set(codes) & gt
+    denom = max(dx_cnt, gt_cnt)
+    return {
+        "top1_hit": bool(codes) and codes[0] in gt,
+        "top2_hit": any(c in gt for c in codes[:2]),
+        "top3_hit": any(c in gt for c in codes[:3]),
+        "recall": round(len(tp) / len(gt), 4) if gt else 0.0,
+        "precision": round(len(tp) / denom, 4) if denom else 0.0,
+        "cat_recall": round(_cat_recall(gt, codes), 4),
+        "cat_precision": round(_cat_precision(gt, codes), 4),
+    }
+
+
+def _empty_metrics() -> dict:
+    """Return a zero-valued metrics dict (used when a model has no codes)."""
+    return {
+        "top1_hit": False,
+        "top2_hit": False,
+        "top3_hit": False,
+        "recall": 0.0,
+        "precision": 0.0,
+        "cat_recall": 0.0,
+        "cat_precision": 0.0,
+    }
 
 
 def load_cases(path: str = CASES_PATH) -> list[dict]:
@@ -65,17 +133,26 @@ def call_diagnose(text: str, timeout: float = 600) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _print_model_line(tag: str, mark: str, dx_cnt: int, res: list[dict],
+                      m: dict) -> None:
+    """Print one model's per-case summary line (A, B, or C)."""
+    codes_str = ", ".join(f"{c['code']} ({c['similarity']:.0%})" for c in res) or "(none)"
+    print(f"{'':9s}{tag} [{mark}] {dx_cnt}dx  {codes_str}  "
+          f"R:{m['recall']:.0%} P:{m['precision']:.0%} "
+          f"CatR:{m['cat_recall']:.0%} CatP:{m['cat_precision']:.0%}")
+
+
 def _evaluate_case(case: dict, index: int, total: int) -> dict | None:
     """Evaluate a single case against the /diagnose endpoint.
 
-    Calls the API, extracts per-model results, computes hit/recall/precision
-    metrics, prints a one-line summary, and returns a details dict for
-    aggregation and JSON export.
+    Calls the API, computes metrics for both models (and the critic if
+    triggered), prints a summary, and returns a details dict.
 
     Returns ``None`` if the API call fails (error is printed).
     """
     gt_raw = case["icd10_cm"]["codes"]
     gt = {normalize(c) for c in gt_raw}
+    gt_cnt = len(gt_raw)
     label = f"[{index + 1:2d}/{total}]"
 
     try:
@@ -85,95 +162,48 @@ def _evaluate_case(case: dict, index: int, total: int) -> dict | None:
         return None
 
     elapsed = result.get("elapsed_s", 0)
-    res_a = result["results"][0]["codes"]
-    res_b = result["results"][1]["codes"]
+    ra, rb = result["results"]
+    res_a, res_b = ra["codes"], rb["codes"]
 
-    # Extract codes (normalized) and diagnosis counts for each model.
     codes_a = [c["code"] for c in res_a]
     codes_b = [c["code"] for c in res_b]
-    dx_a = result["results"][0].get("diagnoses", [])
-    dx_b = result["results"][1].get("diagnoses", [])
-    reasoning_a = result["results"][0].get("reasoning", "")
-    reasoning_b = result["results"][1].get("reasoning", "")
-    dx_cnt_a = len(dx_a)
-    dx_cnt_b = len(dx_b)
-    gt_cnt = len(gt_raw)
+    dx_a, dx_b = ra.get("diagnoses", []), rb.get("diagnoses", [])
+    reasoning_a, reasoning_b = ra.get("reasoning", ""), rb.get("reasoning", "")
 
-    # Set-based overlap for recall/precision.
-    set_a = set(codes_a)
-    set_b = set(codes_b)
-    tp_a = set_a & gt
-    tp_b = set_b & gt
+    ma = _model_metrics(gt, codes_a, len(dx_a), gt_cnt)
+    mb = _model_metrics(gt, codes_b, len(dx_b), gt_cnt)
 
-    # Top-N hit checks: is the correct code within the first N results?
-    hit_1a = bool(codes_a) and codes_a[0] in gt
-    hit_1b = bool(codes_b) and codes_b[0] in gt
-    hit_2a = any(c in gt for c in codes_a[:2])
-    hit_2b = any(c in gt for c in codes_b[:2])
-    hit_3a = any(c in gt for c in codes_a[:3])
-    hit_3b = any(c in gt for c in codes_b[:3])
-    same_top1 = bool(codes_a) and bool(codes_b) and codes_a[0] == codes_b[0]
-
-    # Recall: fraction of GT codes found in the model's results.
-    rec_a = len(tp_a) / len(gt) if gt else 0.0
-    rec_b = len(tp_b) / len(gt) if gt else 0.0
-
-    # Precision@GT: denominator is max(dx_count, gt_count) so that
-    # overdiagnosis penalises precision, but search breadth (k per
-    # diagnosis) does not.  Underdiagnosis is also penalised because
-    # the denominator stays at gt_count when dx_count < gt_count.
-    denom_a = max(dx_cnt_a, gt_cnt)
-    denom_b = max(dx_cnt_b, gt_cnt)
-    prec_a = len(tp_a) / denom_a if denom_a else 0.0
-    prec_b = len(tp_b) / denom_b if denom_b else 0.0
-
-    # Print per-case summary.  '+' = top-2 hit, '-' = miss.
-    a_str = ", ".join(f"{c['code']} ({c['similarity']:.0%})" for c in res_a) or "(none)"
-    b_str = ", ".join(f"{c['code']} ({c['similarity']:.0%})" for c in res_b) or "(none)"
-    mark_a = "+" if hit_2a else "-"
-    mark_b = "+" if hit_2b else "-"
+    # Print header and model lines.
     gt_word = "code" if gt_cnt == 1 else "codes"
     print(f"{label} {elapsed:5.1f}s  GT: {', '.join(gt_raw)} ({gt_cnt} {gt_word})")
-    print(f"{'':9s}A [{mark_a}] {dx_cnt_a}dx  {a_str}  R:{rec_a:.0%} P:{prec_a:.0%}")
+    _print_model_line("A", "+" if ma["top2_hit"] else "-", len(dx_a), res_a, ma)
     if reasoning_a:
         print(f"{'':9s}    \"{reasoning_a[:120]}\"")
-    print(f"{'':9s}B [{mark_b}] {dx_cnt_b}dx  {b_str}  R:{rec_b:.0%} P:{prec_b:.0%}")
+    _print_model_line("B", "+" if mb["top2_hit"] else "-", len(dx_b), res_b, mb)
     if reasoning_b:
         print(f"{'':9s}    \"{reasoning_b[:120]}\"")
 
-    # Critic results.
+    # Critic results (if triggered).
     critic_triggered = result.get("critic_triggered", False)
     critic_rounds = result.get("critic_rounds", [])
     critic_codes: list[str] = []
     critic_dx: list[str] = []
     critic_reasoning = ""
-    rec_c: float = 0.0
-    prec_c: float = 0.0
-    hit_1c = False
-    hit_2c = False
-    hit_3c = False
+    mc = _empty_metrics()
+
     if critic_triggered and critic_rounds:
         final = critic_rounds[-1]
         critic_codes = [c["code"] for c in final.get("codes", [])]
         critic_dx = final.get("diagnoses", [])
         critic_reasoning = final.get("reasoning", "")
+        mc = _model_metrics(gt, critic_codes, len(critic_dx), gt_cnt)
 
-        # Critic metrics (same formulas as models A/B).
-        set_c = set(critic_codes)
-        tp_c = set_c & gt
-        rec_c = len(tp_c) / len(gt) if gt else 0.0
-        dx_cnt_c = len(critic_dx)
-        denom_c = max(dx_cnt_c, gt_cnt)
-        prec_c = len(tp_c) / denom_c if denom_c else 0.0
-        hit_1c = bool(critic_codes) and critic_codes[0] in gt
-        hit_2c = any(c in gt for c in critic_codes[:2])
-        hit_3c = any(c in gt for c in critic_codes[:3])
-
-        mark_c = "+" if hit_2c else "-"
-        c_str = ", ".join(critic_codes[:5]) or "(none)"
         n_rounds = len(critic_rounds)
-        print(f"{'':9s}C [{mark_c}] {dx_cnt_c}dx  {c_str}  "
-              f"R:{rec_c:.0%} P:{prec_c:.0%}  "
+        c_str = ", ".join(critic_codes[:5]) or "(none)"
+        mark_c = "+" if mc["top2_hit"] else "-"
+        print(f"{'':9s}C [{mark_c}] {len(critic_dx)}dx  {c_str}  "
+              f"R:{mc['recall']:.0%} P:{mc['precision']:.0%} "
+              f"CatR:{mc['cat_recall']:.0%} CatP:{mc['cat_precision']:.0%}  "
               f"({n_rounds} round{'s' if n_rounds != 1 else ''})")
         if critic_reasoning:
             print(f"{'':9s}    \"{critic_reasoning[:120]}\"")
@@ -183,28 +213,14 @@ def _evaluate_case(case: dict, index: int, total: int) -> dict | None:
         "ground_truth": gt_raw,
         "elapsed_s": elapsed,
         "model_a": {
-            "diagnoses": dx_a,
-            "dx_count": dx_cnt_a,
-            "codes": codes_a,
-            "reasoning": reasoning_a,
-            "top1_hit": hit_1a,
-            "top2_hit": hit_2a,
-            "top3_hit": hit_3a,
-            "recall": round(rec_a, 4),
-            "precision": round(prec_a, 4),
+            "diagnoses": dx_a, "dx_count": len(dx_a), "codes": codes_a,
+            "reasoning": reasoning_a, **ma,
         },
         "model_b": {
-            "diagnoses": dx_b,
-            "dx_count": dx_cnt_b,
-            "codes": codes_b,
-            "reasoning": reasoning_b,
-            "top1_hit": hit_1b,
-            "top2_hit": hit_2b,
-            "top3_hit": hit_3b,
-            "recall": round(rec_b, 4),
-            "precision": round(prec_b, 4),
+            "diagnoses": dx_b, "dx_count": len(dx_b), "codes": codes_b,
+            "reasoning": reasoning_b, **mb,
         },
-        "agreement": same_top1,
+        "agreement": bool(codes_a) and bool(codes_b) and codes_a[0] == codes_b[0],
         "critic": {
             "triggered": critic_triggered,
             "rounds": len(critic_rounds),
@@ -212,11 +228,7 @@ def _evaluate_case(case: dict, index: int, total: int) -> dict | None:
             "dx_count": len(critic_dx),
             "codes": critic_codes,
             "reasoning": critic_reasoning,
-            "top1_hit": hit_1c,
-            "top2_hit": hit_2c,
-            "top3_hit": hit_3c,
-            "recall": round(rec_c, 4),
-            "precision": round(prec_c, 4),
+            **mc,
         },
     }
 
@@ -229,67 +241,69 @@ def _evaluate_case(case: dict, index: int, total: int) -> dict | None:
 def _compute_summary(details: list[dict]) -> dict:
     """Aggregate per-case metrics into summary statistics.
 
-    Computes top-N hit rates, average recall/precision/F1, diagnosis count
-    metrics (match/over/under), and model agreement rate.
-
-    Args:
-        details: List of per-case dicts from :func:`_evaluate_case`.
-
-    Returns:
-        A flat dict of summary metrics ready for table display and JSON.
+    Computes top-N hit rates, average recall/precision/F1 (exact + category),
+    diagnosis count metrics (match/over/under), and model agreement rate.
     """
     total = len(details)
 
-    top1_a = sum(1 for d in details if d["model_a"]["top1_hit"])
-    top1_b = sum(1 for d in details if d["model_b"]["top1_hit"])
-    top2_a = sum(1 for d in details if d["model_a"]["top2_hit"])
-    top2_b = sum(1 for d in details if d["model_b"]["top2_hit"])
-    top3_a = sum(1 for d in details if d["model_a"]["top3_hit"])
-    top3_b = sum(1 for d in details if d["model_b"]["top3_hit"])
+    # --- helpers for the A/B pair pattern ---
+    def _hits(key: str) -> tuple[int, int]:
+        return (sum(1 for d in details if d["model_a"][key]),
+                sum(1 for d in details if d["model_b"][key]))
 
-    avg_rec_a = sum(d["model_a"]["recall"] for d in details) / total
-    avg_rec_b = sum(d["model_b"]["recall"] for d in details) / total
-    avg_prec_a = sum(d["model_a"]["precision"] for d in details) / total
-    avg_prec_b = sum(d["model_b"]["precision"] for d in details) / total
+    def _avg(key: str) -> tuple[float, float]:
+        return (sum(d["model_a"][key] for d in details) / total,
+                sum(d["model_b"][key] for d in details) / total)
 
-    denom_a = avg_rec_a + avg_prec_a
-    denom_b = avg_rec_b + avg_prec_b
-    f1_a = 2 * avg_rec_a * avg_prec_a / denom_a if denom_a else 0.0
-    f1_b = 2 * avg_rec_b * avg_prec_b / denom_b if denom_b else 0.0
+    top1_a, top1_b = _hits("top1_hit")
+    top2_a, top2_b = _hits("top2_hit")
+    top3_a, top3_b = _hits("top3_hit")
+
+    avg_rec_a, avg_rec_b = _avg("recall")
+    avg_prec_a, avg_prec_b = _avg("precision")
+    f1_a, f1_b = _f1(avg_rec_a, avg_prec_a), _f1(avg_rec_b, avg_prec_b)
+
+    avg_cat_rec_a, avg_cat_rec_b = _avg("cat_recall")
+    avg_cat_prec_a, avg_cat_prec_b = _avg("cat_precision")
+    cat_f1_a = _f1(avg_cat_rec_a, avg_cat_prec_a)
+    cat_f1_b = _f1(avg_cat_rec_b, avg_cat_prec_b)
 
     # Diagnosis count metrics.
-    dx_cnts_a = [d["model_a"]["dx_count"] for d in details]
-    dx_cnts_b = [d["model_b"]["dx_count"] for d in details]
-    gt_cnts = [len(d["ground_truth"]) for d in details]
-    avg_dx_a = sum(dx_cnts_a) / total
-    avg_dx_b = sum(dx_cnts_b) / total
-    avg_gt = sum(gt_cnts) / total
+    dx_a = [d["model_a"]["dx_count"] for d in details]
+    dx_b = [d["model_b"]["dx_count"] for d in details]
+    gt_c = [len(d["ground_truth"]) for d in details]
+    avg_gt = sum(gt_c) / total
 
-    match_a = sum(1 for da, g in zip(dx_cnts_a, gt_cnts) if da == g)
-    match_b = sum(1 for db, g in zip(dx_cnts_b, gt_cnts) if db == g)
-    over_a = sum(1 for da, g in zip(dx_cnts_a, gt_cnts) if da > g)
-    over_b = sum(1 for db, g in zip(dx_cnts_b, gt_cnts) if db > g)
-    under_a = sum(1 for da, g in zip(dx_cnts_a, gt_cnts) if da < g)
-    under_b = sum(1 for db, g in zip(dx_cnts_b, gt_cnts) if db < g)
+    def _cnt_cmp(dx: list[int]) -> tuple[int, int, int]:
+        match = sum(1 for d, g in zip(dx, gt_c) if d == g)
+        over = sum(1 for d, g in zip(dx, gt_c) if d > g)
+        under = sum(1 for d, g in zip(dx, gt_c) if d < g)
+        return match, over, under
 
+    match_a, over_a, under_a = _cnt_cmp(dx_a)
+    match_b, over_b, under_b = _cnt_cmp(dx_b)
     agree = sum(1 for d in details if d["agreement"])
 
     # Critic metrics — averaged only over cases where the critic was triggered.
-    critic_details = [d for d in details if d["critic"]["triggered"]]
-    n_critic = len(critic_details)
+    cd = [d for d in details if d["critic"]["triggered"]]
+    n_critic = len(cd)
 
     if n_critic > 0:
-        top1_c = sum(1 for d in critic_details if d["critic"]["top1_hit"])
-        top2_c = sum(1 for d in critic_details if d["critic"]["top2_hit"])
-        top3_c = sum(1 for d in critic_details if d["critic"]["top3_hit"])
-        avg_rec_c = sum(d["critic"]["recall"] for d in critic_details) / n_critic
-        avg_prec_c = sum(d["critic"]["precision"] for d in critic_details) / n_critic
-        denom_c = avg_rec_c + avg_prec_c
-        f1_c = 2 * avg_rec_c * avg_prec_c / denom_c if denom_c else 0.0
-        avg_dx_c = sum(d["critic"]["dx_count"] for d in critic_details) / n_critic
+        cn = n_critic
+        top1_c = sum(1 for d in cd if d["critic"]["top1_hit"])
+        top2_c = sum(1 for d in cd if d["critic"]["top2_hit"])
+        top3_c = sum(1 for d in cd if d["critic"]["top3_hit"])
+        avg_rec_c = sum(d["critic"]["recall"] for d in cd) / cn
+        avg_prec_c = sum(d["critic"]["precision"] for d in cd) / cn
+        f1_c = _f1(avg_rec_c, avg_prec_c)
+        avg_cat_rec_c = sum(d["critic"]["cat_recall"] for d in cd) / cn
+        avg_cat_prec_c = sum(d["critic"]["cat_precision"] for d in cd) / cn
+        cat_f1_c = _f1(avg_cat_rec_c, avg_cat_prec_c)
+        avg_dx_c = sum(d["critic"]["dx_count"] for d in cd) / cn
     else:
         top1_c = top2_c = top3_c = 0
         avg_rec_c = avg_prec_c = f1_c = avg_dx_c = 0.0
+        avg_cat_rec_c = avg_cat_prec_c = cat_f1_c = 0.0
 
     return {
         "total": total,
@@ -300,13 +314,19 @@ def _compute_summary(details: list[dict]) -> dict:
         "avg_rec_a": avg_rec_a, "avg_rec_b": avg_rec_b,
         "avg_prec_a": avg_prec_a, "avg_prec_b": avg_prec_b,
         "f1_a": f1_a, "f1_b": f1_b,
-        "avg_gt": avg_gt, "avg_dx_a": avg_dx_a, "avg_dx_b": avg_dx_b,
+        "avg_cat_rec_a": avg_cat_rec_a, "avg_cat_rec_b": avg_cat_rec_b,
+        "avg_cat_prec_a": avg_cat_prec_a, "avg_cat_prec_b": avg_cat_prec_b,
+        "cat_f1_a": cat_f1_a, "cat_f1_b": cat_f1_b,
+        "avg_gt": avg_gt,
+        "avg_dx_a": sum(dx_a) / total, "avg_dx_b": sum(dx_b) / total,
         "match_a": match_a, "match_b": match_b,
         "over_a": over_a, "over_b": over_b,
         "under_a": under_a, "under_b": under_b,
         "agree": agree,
         "top1_c": top1_c, "top2_c": top2_c, "top3_c": top3_c,
         "avg_rec_c": avg_rec_c, "avg_prec_c": avg_prec_c, "f1_c": f1_c,
+        "avg_cat_rec_c": avg_cat_rec_c, "avg_cat_prec_c": avg_cat_prec_c,
+        "cat_f1_c": cat_f1_c,
         "avg_dx_c": avg_dx_c,
     }
 
@@ -337,6 +357,12 @@ def _build_rows(m: dict) -> list[tuple[str, str, str]]:
         (f"Prec@GT ({MODEL_B})", "", f"{m['avg_prec_b']:.1%}"),
         (f"F1  ({MODEL_A})", "", f"{m['f1_a']:.1%}"),
         (f"F1  ({MODEL_B})", "", f"{m['f1_b']:.1%}"),
+        (f"Cat Recall  ({MODEL_A})", "", f"{m['avg_cat_rec_a']:.1%}"),
+        (f"Cat Recall  ({MODEL_B})", "", f"{m['avg_cat_rec_b']:.1%}"),
+        (f"Cat Prec@GT ({MODEL_A})", "", f"{m['avg_cat_prec_a']:.1%}"),
+        (f"Cat Prec@GT ({MODEL_B})", "", f"{m['avg_cat_prec_b']:.1%}"),
+        (f"Cat F1  ({MODEL_A})", "", f"{m['cat_f1_a']:.1%}"),
+        (f"Cat F1  ({MODEL_B})", "", f"{m['cat_f1_b']:.1%}"),
         ("Avg GT codes", "", f"{m['avg_gt']:.1f}"),
         (f"Avg diagnoses  ({MODEL_A})", "", f"{m['avg_dx_a']:.1f}"),
         (f"Avg diagnoses  ({MODEL_B})", "", f"{m['avg_dx_b']:.1f}"),
@@ -359,6 +385,9 @@ def _build_rows(m: dict) -> list[tuple[str, str, str]]:
             (f"Recall  (Critic, {nc} trig.)", "", f"{m['avg_rec_c']:.1%}"),
             (f"Prec@GT (Critic, {nc} trig.)", "", f"{m['avg_prec_c']:.1%}"),
             (f"F1  (Critic, {nc} trig.)", "", f"{m['f1_c']:.1%}"),
+            (f"Cat Recall  (Critic, {nc} trig.)", "", f"{m['avg_cat_rec_c']:.1%}"),
+            (f"Cat Prec@GT (Critic, {nc} trig.)", "", f"{m['avg_cat_prec_c']:.1%}"),
+            (f"Cat F1  (Critic, {nc} trig.)", "", f"{m['cat_f1_c']:.1%}"),
             (f"Avg diagnoses  (Critic)", "", f"{m['avg_dx_c']:.1f}"),
         ])
 
@@ -397,6 +426,12 @@ def _build_metrics_json(m: dict) -> dict:
         "precision_b": round(m["avg_prec_b"], 4),
         "f1_a": round(m["f1_a"], 4),
         "f1_b": round(m["f1_b"], 4),
+        "cat_recall_a": round(m["avg_cat_rec_a"], 4),
+        "cat_recall_b": round(m["avg_cat_rec_b"], 4),
+        "cat_precision_a": round(m["avg_cat_prec_a"], 4),
+        "cat_precision_b": round(m["avg_cat_prec_b"], 4),
+        "cat_f1_a": round(m["cat_f1_a"], 4),
+        "cat_f1_b": round(m["cat_f1_b"], 4),
         "avg_gt_codes": round(m["avg_gt"], 2),
         "avg_dx_a": round(m["avg_dx_a"], 2),
         "avg_dx_b": round(m["avg_dx_b"], 2),
@@ -422,6 +457,9 @@ def _build_metrics_json(m: dict) -> dict:
         metrics["critic_recall"] = round(m["avg_rec_c"], 4)
         metrics["critic_precision"] = round(m["avg_prec_c"], 4)
         metrics["critic_f1"] = round(m["f1_c"], 4)
+        metrics["critic_cat_recall"] = round(m["avg_cat_rec_c"], 4)
+        metrics["critic_cat_precision"] = round(m["avg_cat_prec_c"], 4)
+        metrics["critic_cat_f1"] = round(m["cat_f1_c"], 4)
         metrics["critic_avg_dx"] = round(m["avg_dx_c"], 2)
 
     return metrics

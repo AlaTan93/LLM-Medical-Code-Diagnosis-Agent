@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 
 from pydantic import BaseModel, ValidationError, field_validator
 
@@ -22,6 +23,9 @@ _MAX_DIAGNOSES = 10
 _MAX_RETRIES = 4
 _TEMP_INCREMENT = 0.05
 _MAX_TEMP = 0.3
+
+_DIAGNOSE_TOKENS = 4096
+_DIAGNOSE_CONCISE_TOKENS = 2048
 
 _DIAGNOSE_SYSTEM = (
     "Analyze the patient's clinical presentation, then produce ICD-10 type diagnoses.\n"
@@ -45,30 +49,30 @@ _DIAGNOSE_SYSTEM_CONCISE = (
     "Example: {\"diagnoses\": [\"Opioid dependence, in remission\"]}"
 )
 
-_CRITIC_SYSTEM = (
-    "You are a senior clinical coding reviewer. Two independent medical "
-    "models analyzed the same patient case and produced different "
-    "diagnoses.\n\n"
-    "Carefully analyze where the models agree and disagree:\n"
-    "- Which diagnoses are well-supported by the clinical text?\n"
-    "- Are there missing diagnoses the models overlooked?\n"
-    "- Are there redundant or incorrect diagnoses?\n"
-    "- Which specific ICD-10 codes are most appropriate?\n\n"
-    "Reason freely and thoroughly.  After your analysis, output a JSON "
-    "object with these fields:\n"
-    '- "reasoning": Your detailed clinical reasoning\n'
-    '- "diagnoses": Your reconciled list of 1-10 concise ICD-10 type '
-    'diagnostic sentences\n'
-    '- "queries": Search terms to find ICD-10 codes for any new or changed '
-    'diagnoses (these will be embedded and matched against the code '
-    'database)\n'
-    '- "done": true if you are confident in your reconciled diagnoses, '
-    'false if you need another round of review\n'
-)
 
 _BOXED_RE = re.compile(r"\\boxed\{(.*)\}", re.DOTALL)
 _NUM_RE = re.compile(r"^[\d]+[.)]?\s*")
 _BULLET_RE = re.compile(r"^[-*]\s*")
+
+
+@dataclass
+class ModelOutput:
+    """A medical model's output bundle: diagnoses, codes, and reasoning.
+
+    Groups the per-model quartet so that :func:`medicoder.critic.diagnose_critic`
+    and :func:`medicoder.critic.build_critic_context` accept 2 positional
+    args instead of 10.
+    """
+
+    model: str
+    diagnoses: list[str]
+    codes: list[ICD10Match]
+    reasoning: str
+
+
+def clean_str_list(v: list[str]) -> list[str]:
+    """Strip and filter a list of strings, capping at _MAX_DIAGNOSES."""
+    return [s.strip() for s in v if s.strip()][:_MAX_DIAGNOSES]
 
 
 class DiagnosisOutput(BaseModel):
@@ -91,36 +95,7 @@ class DiagnosisOutput(BaseModel):
     @field_validator("diagnoses", mode="after")
     @classmethod
     def clean_diagnoses(cls, v: list[str]) -> list[str]:
-        return [d.strip() for d in v if d.strip()][:_MAX_DIAGNOSES]
-
-
-class CriticOutput(BaseModel):
-    """Pydantic schema for validating debate-critic JSON output.
-
-    The critic reconciles two models' diagnoses and produces its own
-    reasoning, reconciled diagnoses, search queries, and a done flag.
-
-    Attributes:
-        reasoning: The critic's clinical reasoning.
-        diagnoses: 1-10 reconciled diagnosis strings.
-        queries: Free-form search terms for ICD-10 vector search.
-        done: Whether the critic is confident (``True`` ends the loop).
-    """
-
-    reasoning: str = ""
-    diagnoses: list[str]
-    queries: list[str] = []
-    done: bool = False
-
-    @field_validator("diagnoses", mode="after")
-    @classmethod
-    def clean_diagnoses(cls, v: list[str]) -> list[str]:
-        return [d.strip() for d in v if d.strip()][:_MAX_DIAGNOSES]
-
-    @field_validator("queries", mode="after")
-    @classmethod
-    def clean_queries(cls, v: list[str]) -> list[str]:
-        return [q.strip() for q in v if q.strip()][:_MAX_DIAGNOSES]
+        return clean_str_list(v)
 
 
 def _extract_json(raw: str) -> dict | None:
@@ -169,6 +144,21 @@ def _extract_json(raw: str) -> dict | None:
     return None
 
 
+def _parse_structured(raw: str, schema: type) -> object | None:
+    """Extract JSON from raw text and validate with a Pydantic schema.
+
+    Tries :func:`_extract_json` then constructs *schema*.  Returns the
+    validated model instance or ``None`` if parsing or validation fails.
+    """
+    data = _extract_json(raw)
+    if data is None:
+        return None
+    try:
+        return schema(**data)
+    except (ValidationError, TypeError):
+        return None
+
+
 def _parse_diagnoses(raw: str) -> list[str]:
     """Parse raw model output into a list of clean diagnosis strings.
 
@@ -177,7 +167,7 @@ def _parse_diagnoses(raw: str) -> list[str]:
 
     Args:
         raw: The raw text returned by the model (thinking blocks already
-            stripped by :func:`medicoder.proxy.chat_completion`).
+            separated by :func:`medicoder.proxy.extract_thinking`).
 
     Returns:
         A list of 0-_MAX_DIAGNOSES diagnosis strings.
@@ -206,7 +196,7 @@ def diagnose(
     model: str,
     *,
     temperature: float = 0.1,
-) -> tuple[list[str], str]:
+) -> tuple[list[str], str, str]:
     """Forward clinical text to a medical model for diagnoses and reasoning.
 
     Uses an incremental retry strategy: the first attempt uses the full
@@ -216,19 +206,21 @@ def diagnose(
     that suppresses thinking, a 2048-token budget, and a slightly higher
     temperature (+0.05 per attempt, capped at 0.3).
 
-    Pipeline per attempt: system prompt → model call → strip thinking →
+    Pipeline per attempt: system prompt → model call → extract thinking →
     JSON extraction → Pydantic validation → fallback to regex parsing.
 
     Args:
         text: Clinical text or patient description.
-        model: LiteLLM alias for the medical model (e.g. ``ii-medical-q8``).
+        model: LiteLLM alias for the medical model (e.g. ``medgemma-27b-q4_k_s``).
         temperature: Base sampling temperature (default 0.1).  Retries
             increment this by 0.05 per attempt up to :data:`_MAX_TEMP`.
 
     Returns:
-        A ``(diagnoses, reasoning)`` tuple where *diagnoses* is a list of
-        0-_MAX_DIAGNOSES strings and *reasoning* is the model's clinical
-        explanation (empty string on fallback or concise-prompt retries).
+        A ``(diagnoses, reasoning, thinking)`` tuple where *diagnoses*
+        is a list of 0-_MAX_DIAGNOSES strings, *reasoning* is the
+        model's clinical explanation (empty string on fallback or
+        concise-prompt retries), and *thinking* is the raw
+        ``<think>`` block content (empty for non-reasoning models).
     """
     for attempt in range(_MAX_RETRIES):
         temp = min(temperature + attempt * _TEMP_INCREMENT, _MAX_TEMP)
@@ -241,7 +233,7 @@ def diagnose(
                 {"role": "system", "content": _DIAGNOSE_SYSTEM},
                 {"role": "user", "content": text},
             ]
-            max_tokens = 4096
+            max_tokens = _DIAGNOSE_TOKENS
         else:
             print(
                 f"[diagnose] retry {attempt}/{_MAX_RETRIES - 1} "
@@ -251,10 +243,10 @@ def diagnose(
                 {"role": "system", "content": _DIAGNOSE_SYSTEM_CONCISE},
                 {"role": "user", "content": text},
             ]
-            max_tokens = 2048
+            max_tokens = _DIAGNOSE_CONCISE_TOKENS
 
         try:
-            raw = proxy.chat_completion(
+            raw, thinking = proxy.chat_completion(
                 model, messages, temperature=temp, max_tokens=max_tokens
             )
         except Exception:
@@ -264,156 +256,34 @@ def diagnose(
 
         # Try structured JSON first (preferred path for models that follow
         # the system prompt's format instructions).
-        data = _extract_json(raw)
-        if data is not None:
-            try:
-                result = DiagnosisOutput(**data)
-                if result.diagnoses:
-                    return result.diagnoses, result.reasoning
-            except (ValidationError, TypeError):
-                pass
+        result = _parse_structured(raw, DiagnosisOutput)
+        if isinstance(result, DiagnosisOutput) and result.diagnoses:
+            return result.diagnoses, result.reasoning, thinking
 
         # Fallback: line-based regex parsing for models that ignore JSON.
         diagnoses = _parse_diagnoses(raw)
         if diagnoses:
-            return diagnoses, ""
+            return diagnoses, "", thinking
 
     # All retries exhausted.
     print(f"[diagnose] all {_MAX_RETRIES} attempts failed; returning empty")
-    return [], ""
+    return [], "", ""
 
 
-def _build_critic_context(
-    text: str,
-    model_a: str,
-    diagnoses_a: list[str],
-    codes_a: list[ICD10Match],
-    reasoning_a: str,
-    model_b: str,
-    diagnoses_b: list[str],
-    codes_b: list[ICD10Match],
-    reasoning_b: str,
-    previous_rounds: list[dict],
-) -> str:
-    """Build the user message giving the critic both models' context.
+def safe_search(diagnoses: list[str], k: int = 3) -> list[ICD10Match]:
+    """Run :func:`search_icd10`, returning ``[]`` on error or invalid input.
 
-    Renders a structured summary of each model's diagnoses, reasoning, and
-    ICD-10 code matches, plus any previous critic rounds so the critic can
-    iterate rather than repeat itself.
+    Filters out empty strings and ``[error]``-prefixed entries (emitted by
+    node functions when the model call fails) so that error placeholders
+    don't pollute the vector search results.
     """
-    lines: list[str] = [f"Patient: {text}\n"]
-
-    def _model_section(name: str, dx: list[str], codes: list[ICD10Match],
-                       reasoning: str) -> list[str]:
-        sect = [f"{name} diagnoses:"]
-        for i, d in enumerate(dx, 1):
-            sect.append(f"  {i}. {d}")
-        if reasoning:
-            sect.append(f"{name} reasoning: {reasoning}")
-        sect.append(f"{name} ICD-10 codes:")
-        if codes:
-            for c in codes:
-                sect.append(f"  {c.code} - {c.short_desc} "
-                            f"(similarity {c.similarity:.2f})")
-        else:
-            sect.append("  (none)")
-        return sect
-
-    lines.extend(_model_section(f"Model A ({model_a})", diagnoses_a,
-                                codes_a, reasoning_a))
-    lines.append("")
-    lines.extend(_model_section(f"Model B ({model_b})", diagnoses_b,
-                                codes_b, reasoning_b))
-
-    if previous_rounds:
-        lines.append("\nPrevious critic rounds:")
-        for r in previous_rounds:
-            lines.append(f"  Round {r['round']}:")
-            if r.get("reasoning"):
-                lines.append(f"    Reasoning: {r['reasoning']}")
-            lines.append(f"    Diagnoses: {', '.join(r['diagnoses'])}")
-            if r.get("codes"):
-                code_strs = [c["code"] for c in r["codes"]]
-                lines.append(f"    Codes: {', '.join(code_strs)}")
-
-    return "\n".join(lines)
-
-
-def diagnose_critic(
-    text: str,
-    model_a: str,
-    diagnoses_a: list[str],
-    codes_a: list[ICD10Match],
-    reasoning_a: str,
-    model_b: str,
-    diagnoses_b: list[str],
-    codes_b: list[ICD10Match],
-    reasoning_b: str,
-    previous_rounds: list[dict],
-    critic_model: str,
-    *,
-    temperature: float = 0.25,
-    max_tokens: int = 8192,
-) -> tuple[list[str], list[str], str, bool]:
-    """Run the debate-critic agent to reconcile two models' diagnoses.
-
-    The critic receives both models' diagnoses, ICD-10 codes, reasoning,
-    and any previous round history, then produces its own reconciled
-    diagnoses plus optional search queries.
-
-    Uses a generous token budget (8192) to allow the critic to reason
-    freely before producing structured JSON output.
-
-    Args:
-        text: Original clinical text.
-        model_a: LiteLLM alias for model A.
-        diagnoses_a: Diagnoses from model A.
-        codes_a: ICD-10 matches for model A.
-        reasoning_a: Clinical reasoning from model A.
-        model_b: LiteLLM alias for model B.
-        diagnoses_b: Diagnoses from model B.
-        codes_b: ICD-10 matches for model B.
-        reasoning_b: Clinical reasoning from model B.
-        previous_rounds: Prior critic rounds (list of dicts with keys
-            ``round``, ``reasoning``, ``diagnoses``, ``codes``).
-        critic_model: LiteLLM alias for the critic model.
-        temperature: Sampling temperature (default 0.25 — moderate
-            creativity for reconciliation).
-        max_tokens: Token budget (default 8192).
-
-    Returns:
-        A ``(diagnoses, queries, reasoning, done)`` tuple.  On parse
-        failure, ``diagnoses`` is empty and ``done`` is ``False``.
-    """
-    user_msg = _build_critic_context(
-        text, model_a, diagnoses_a, codes_a, reasoning_a,
-        model_b, diagnoses_b, codes_b, reasoning_b,
-        previous_rounds,
-    )
-    messages = [
-        {"role": "system", "content": _CRITIC_SYSTEM},
-        {"role": "user", "content": user_msg},
-    ]
-
+    valid = [d for d in diagnoses if d and not d.startswith("[error]")]
+    if not valid:
+        return []
     try:
-        raw = proxy.chat_completion(
-            critic_model, messages,
-            temperature=temperature, max_tokens=max_tokens,
-        )
-    except Exception as e:
-        print(f"[critic] model call failed: {e}")
-        return [], [], "", False
-
-    data = _extract_json(raw)
-    if data is not None:
-        try:
-            result = CriticOutput(**data)
-            return result.diagnoses, result.queries, result.reasoning, result.done
-        except (ValidationError, TypeError):
-            pass
-
-    diagnoses = _parse_diagnoses(raw)
-    return diagnoses, [], "", False
+        return search_icd10(valid, k=k)
+    except Exception:
+        return []
 
 
 def search_icd10(queries: list[str], k: int = 3) -> list[ICD10Match]:
@@ -448,10 +318,10 @@ def search_icd10(queries: list[str], k: int = 3) -> list[ICD10Match]:
             query_vec = json.dumps(vec)
             rows = conn.execute(
                 """SELECT code, short_desc, long_desc,
-                          1 - (embedding <=> %s::vector) AS similarity
+                          1 - (embedding <=> %s::halfvec) AS similarity
                    FROM icd10_codes
                    WHERE is_billable AND embedding IS NOT NULL
-                   ORDER BY embedding <=> %s::vector
+                   ORDER BY embedding <=> %s::halfvec
                    LIMIT %s""",
                 (query_vec, query_vec, k),
             ).fetchall()  # type: ignore

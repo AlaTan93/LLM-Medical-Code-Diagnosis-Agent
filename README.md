@@ -47,7 +47,7 @@ and embedding aliases are hardcoded to the in-container Ollama
 | `ii-medical-q8` | `II-Medical-8B-1706-GGUF:Q8_0` | Medical diagnosis generation |
 | `deepseek-r1-medical-cot` | `DeepSeek-R1-Medical-COT:Q4_K_M` | Medical (thinking model) |
 | `qwen35-medical` | `qwen35-9b-medical:Q4_K_M` | Medical |
-| `embed` | `bge-m3` | 1024-dim embeddings for ICD-10 vector search |
+| `embed` | `zembed-1` | 2560-dim medical embeddings for ICD-10 vector search |
 
 Alias `A` is configured via `.env`:
 
@@ -135,7 +135,7 @@ name = "hf.co/Intelligent-Internet/II-Medical-8B-1706-GGUF:Q8_0"
 name = "hf.co/qaootkcx/qwen35-9b-medical:Q4_K_M"
 
 [[model]]
-name = "bge-m3"
+name = "hf.co/Abiray/zembed-1-Q4_K_M-GGUF:Q4_K_M"
 
 [[model]]
 name = "qwen2.5:7b"
@@ -184,7 +184,7 @@ model to chain tool calls.
    (`<think>...</think>` and orphaned `</think>` tags) are stripped
    automatically; `\boxed{...}` wrappers and leading numbers/bullets are
    removed during parsing.
-2. **Search** — each diagnosis is embedded with bge-m3 (batched in one API
+2. **Search** — each diagnosis is embedded with zembed-1 (batched in one API
    call) and a pgvector cosine-similarity search returns the top-k billable
    ICD-10 codes per diagnosis (default k=3, configurable). Results are
    deduplicated by code (keeping the highest similarity) and sorted. The HNSW
@@ -322,12 +322,12 @@ docker compose exec medicoder sh -c 'LOAD_FORCE=1 python -m medicoder.db.load_ic
 
 ### Vector embeddings
 
-The `vector` extension and a 1024-dim `embedding` column + HNSW index are
+The `vector` extension and a 2560-dim `embedding` column + HNSW index are
 created by `docker/postgres/02-embedding.sql` (runs automatically on a fresh
 data volume; for an existing volume, apply manually as the `postgres`
 superuser).
 
-To populate embeddings (bge-m3 via the `embed` LiteLLM alias), run the
+To populate embeddings (zembed-1 via the `embed` LiteLLM alias), run the
 idempotent bulk embedder — it fills in every code that lacks an embedding
 (billable and non-billable), skipping rows already done:
 
@@ -413,7 +413,7 @@ docker/program/pull_models.py    ollama-init sidecar: auto-pull models.toml on s
 docker/postgres/00-schema.sql    extension + icd10_codes table + indexes
 docker/postgres/01-roles.sh      medicoder (rw) role
 docker/postgres/02-litellm.sh    litellm role + audit database
-docker/postgres/02-embedding.sql pgvector embedding column + HNSW index (1024-dim)
+docker/postgres/02-embedding.sql pgvector embedding column + HNSW index (2560-dim)
 docker/litellm/config.yaml       LiteLLM alias -> upstream routing + DB logging
 docker/litellm/log_callback.py   custom callback -> llm_call_log (prompts/thinking/output/tools)
 medicoder/proxy.py               shared LiteLLM client: chat_completion(), embed(), strip_thinking()
@@ -421,7 +421,7 @@ medicoder/medical.py             shared pipeline functions: diagnose(), diagnose
 medicoder/schemas.py             Pydantic models (ICD10Code, TestRequest/Response, CodeRequest/Response, DiagnoseRequest/Response, CriticRound, ToolResult)
 medicoder/db/connect.py          shared CLI Postgres connection (retried)
 medicoder/db/load_icd10.py       fixed-width -> COPY loader
-medicoder/db/embed_icd10.py      idempotent bulk embedder (bge-m3 via LiteLLM)
+medicoder/db/embed_icd10.py      idempotent bulk embedder (zembed-1 via LiteLLM)
 medicoder/db/pool.py             psycopg connection pool (lifespan-managed)
 medicoder/routes/icd10.py        /codes endpoints
 medicoder/routes/llm.py          POST /test/{model} — call a LiteLLM alias

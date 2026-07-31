@@ -1,8 +1,8 @@
-"""Pydantic models shared across the API."""
+"""Pydantic models and shared types for the API."""
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TypedDict
 
 from pydantic import BaseModel
 
@@ -73,12 +73,12 @@ class CodeRequest(BaseModel):
     Attributes:
         text: Clinical text or patient description to code.
         medical_model: LiteLLM alias of the medical model that generates the
-            diagnoses (default ``ii-medical-q8``).
+            diagnoses (default ``medgemma-27b-q4_k_s``).
         k: Maximum ICD-10 codes to return per diagnosis (default 3).
     """
 
     text: str
-    medical_model: str = "ii-medical-q8"
+    medical_model: str = "medgemma-27b-q4_k_s"
     k: int = 3
 
 
@@ -143,12 +143,15 @@ class DiagnosisResult(BaseModel):
         codes: Matching billable ICD-10-CM codes (most similar first).
         reasoning: The model's clinical reasoning (empty string if the
             model didn't provide any).
+        thinking: The model's raw ``<think>`` block content (empty string
+            for non-reasoning models).
     """
 
     model: str
     diagnoses: list[str]
     codes: list[ICD10Match]
     reasoning: str = ""
+    thinking: str = ""
 
 
 class CriticRound(BaseModel):
@@ -162,6 +165,8 @@ class CriticRound(BaseModel):
             ICD-10 codes (used alongside diagnoses for vector search).
         codes: ICD-10 matches found for this round's diagnoses + queries.
         done: Whether the critic signalled confidence (``true`` ends the loop).
+        thinking: The critic model's raw ``<think>`` block content (empty
+            string for non-reasoning models).
     """
 
     round: int
@@ -170,6 +175,7 @@ class CriticRound(BaseModel):
     queries: list[str] = []
     codes: list[ICD10Match] = []
     done: bool = False
+    thinking: str = ""
 
 
 class DualDiagnoseResponse(BaseModel):
@@ -177,7 +183,7 @@ class DualDiagnoseResponse(BaseModel):
 
     Attributes:
         results: One :class:`DiagnosisResult` per medical model, in the order
-            the models are configured (ii-medical-q8, deepseek-r1-medical-cot).
+            the models are configured (medgemma-27b-q4_k_s, deepseek-r1-medical-cot).
         critic_triggered: Whether the debate-critic loop ran (models disagreed).
         critic_rounds: Full trace of each critic reconciliation round (empty
             if the critic was not triggered or disabled).
@@ -188,3 +194,43 @@ class DualDiagnoseResponse(BaseModel):
     critic_triggered: bool = False
     critic_rounds: list[CriticRound] = []
     elapsed_s: float
+
+
+class DiagnoseState(TypedDict):
+    """Mutable state passed between LangGraph nodes.
+
+    Defined here (rather than in ``routes/diagnose.py``) so that both
+    the route module and :mod:`medicoder.critic` can import it without
+    a circular dependency.
+
+    Attributes:
+        text: The original clinical text (set at invocation).
+        k: Maximum ICD-10 codes to return per diagnosis (default 3).
+        enable_critic: Whether the debate-critic loop may trigger.
+        model_a: LiteLLM alias for model A (set at invocation).
+        model_b: LiteLLM alias for model B (set at invocation).
+        diagnoses_a: Diagnoses from model A (set by ``diagnose_a``).
+        diagnoses_b: Diagnoses from model B (set by ``diagnose_b``).
+        reasoning_a: Clinical reasoning from model A (set by ``diagnose_a``).
+        reasoning_b: Clinical reasoning from model B (set by ``diagnose_b``).
+        thinking_a: Raw ``<think>`` block from model A (set by ``diagnose_a``).
+        thinking_b: Raw ``<think>`` block from model B (set by ``diagnose_b``).
+        codes_a: ICD-10 matches for model A (set by ``search_both``).
+        codes_b: ICD-10 matches for model B (set by ``search_both``).
+        critic_rounds: Accumulated critic round history (set by critic nodes).
+    """
+
+    text: str
+    k: int
+    enable_critic: bool
+    model_a: str
+    model_b: str
+    diagnoses_a: list[str]
+    diagnoses_b: list[str]
+    reasoning_a: str
+    reasoning_b: str
+    thinking_a: str
+    thinking_b: str
+    codes_a: list[ICD10Match]
+    codes_b: list[ICD10Match]
+    critic_rounds: list[CriticRound]

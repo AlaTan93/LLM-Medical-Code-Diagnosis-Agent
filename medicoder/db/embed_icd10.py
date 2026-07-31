@@ -1,15 +1,15 @@
 """Idempotent bulk embedder for ICD-10-CM codes.
 
 Embeds the ``long_desc`` of every ``icd10_codes`` row (billable and
-non-billable) into the ``embedding`` column (pgvector ``vector(1024)``) using
-the bge-m3 model via LiteLLM's ``/v1/embeddings`` endpoint. Non-billable codes
+non-billable) into the ``embedding`` column (pgvector ``halfvec(2560)``) using
+the zembed-1 model via LiteLLM's ``/v1/embeddings`` endpoint. Non-billable codes
 are pre-embedded so they are search-ready if they become billable in a future
 release. Skips rows that already have an embedding, so re-runs only fill gaps.
 
 Prerequisites:
     - ``icd10_codes`` loaded (``load_icd10.py``).
     - ``embedding`` column + HNSW index created (``02-embedding.sql``).
-    - ``bge-m3`` pulled and the ``embed`` alias configured in LiteLLM.
+    - ``zembed-1`` pulled and the ``embed`` alias configured in LiteLLM.
 
 Usage::
 
@@ -32,7 +32,7 @@ SELECT_BATCH_SQL = (
     "WHERE embedding IS NULL "
     "ORDER BY order_number LIMIT %s"
 )
-UPDATE_SQL = "UPDATE icd10_codes SET embedding = %s::vector WHERE order_number = %s"
+UPDATE_SQL = "UPDATE icd10_codes SET embedding = %s::halfvec WHERE order_number = %s"
 
 
 def main() -> int:

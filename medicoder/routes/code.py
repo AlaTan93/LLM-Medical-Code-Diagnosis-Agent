@@ -4,7 +4,7 @@ Two-step pipeline that runs in fixed order (no LLM orchestration needed):
 
 1. **Diagnose** — forwards the clinical text to a medical model (a plain
    chat completion, no tools) and returns 1-10 independent diagnoses.
-2. **Search** — embeds each diagnosis with bge-m3 and runs a pgvector
+2. **Search** — embeds each diagnosis with zembed-1 and runs a pgvector
    cosine-similarity search over billable ICD-10 codes, returning the
    best match per diagnosis (deduplicated, sorted by similarity).
 
@@ -50,7 +50,7 @@ def run_code_pipeline(body: CodeRequest) -> CodeResponse:
 
     # Step 1 — diagnose: medical model produces 1-10 independent diagnoses.
     try:
-        diagnoses, reasoning = diagnose(body.text, body.medical_model)
+        diagnoses, reasoning, _ = diagnose(body.text, body.medical_model)
         tool_results.append(
             ToolResult(
                 tool="diagnose",

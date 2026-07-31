@@ -15,28 +15,18 @@
 #   llm_call_log table (queryable as the litellm DB).
 
 model_list:
-  # The app calls model "A"; LiteLLM forwards to LLM_UPSTREAM_MODEL at
-  # LLM_UPSTREAM_API_BASE, authenticating with LLM_UPSTREAM_API_KEY.
-  # Use a LiteLLM provider prefix, e.g. openai/gpt-4o-mini,
-  # anthropic/claude-3-5-sonnet, ollama/llama3.2.
-  - model_name: A
-    litellm_params:
-      model: os.environ/LLM_UPSTREAM_MODEL
-      api_base: os.environ/LLM_UPSTREAM_API_BASE
-      api_key: os.environ/LLM_UPSTREAM_API_KEY
-
   # In-container Ollama medical models (gpu-amd / gpu-nvidia profiles).
   # Hardcoded to http://ollama:11434 — dormant in cloud mode (errors only if
   # called). LiteLLM splits the provider on the first "/", so e.g.
   # ollama/hf.co/...:Q8_0 -> provider=ollama, model=hf.co/...:Q8_0.
   - model_name: deepseek-r1-medical-cot
     litellm_params:
-      model: ollama/hf.co/rwibawa/DeepSeek-R1-Medical-COT:Q4_K_M
+      model: ollama/hf.co/mradermacher/DeepSeek-R1-Medical-COT-GGUF:Q8_0
       api_base: http://ollama:11434
       api_key: dummy
-  - model_name: gemma-4-medical-q6
+  - model_name: medgemma-27b-q4_k_s
     litellm_params:
-      model: ollama/hf.co/mradermacher/Gemma-4-Medical-ICD10-i1-GGUF:Q6_K
+      model: ollama/hf.co/unsloth/medgemma-27b-text-it-GGUF:Q4_K_S
       api_base: http://ollama:11434
       api_key: dummy
   - model_name: ii-medical-q8
@@ -50,11 +40,11 @@ model_list:
   #     api_base: http://ollama:11434
   #     api_key: dummy
 
-  # Embedding model for ICD-10 vector similarity search (1024-dim bge-m3).
+  # Embedding model for ICD-10 vector similarity search (2560-dim zembed-1).
   # The app calls POST /v1/embeddings {"model": "embed", "input": [...]}.
   - model_name: embed
     litellm_params:
-      model: ollama/bge-m3
+      model: ollama/hf.co/Abiray/zembed-1-Q4_K_M-GGUF:Q4_K_M
       api_base: http://ollama:11434
       api_key: dummy
 

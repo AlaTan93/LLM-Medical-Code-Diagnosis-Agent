@@ -2,7 +2,7 @@
 
 LiteLLM has no host port (in-network only), so this endpoint on the app
 (port 8000) is the sole way to exercise the models from the host. ``model`` is a
-LiteLLM alias from ``docker/litellm/config.yaml`` (e.g. ``ii-medical-q8``,
+LiteLLM alias from ``docker/litellm/config.yaml`` (e.g. ``medgemma-27b-q4_k_s``,
 ``qwen35-medical``, ``A``).
 """
 
@@ -21,7 +21,7 @@ router = APIRouter()
 DEFAULT_PROMPT = "What is the ICD-10-CM code for Type 2 diabetes mellitus without complications?"
 
 
-# curl -X POST 'http://localhost:8000/test/ii-medical-q8' \
+# curl -X POST 'http://localhost:8000/test/medgemma-27b-q4_k_s' \
 #   -H 'Content-Type: application/json' \
 #   -d '{"prompt":"What is the ICD-10-CM code for essential hypertension?"}'
 @router.post("/test/{model}", response_model=TestResponse)
@@ -43,7 +43,7 @@ def test_model(model: str, body: TestRequest | None = None) -> TestResponse:
     prompt = body.prompt if body and body.prompt else DEFAULT_PROMPT
     started = time.time()
     try:
-        content = proxy.chat_completion(
+        content, _ = proxy.chat_completion(
             model, [{"role": "user", "content": prompt}]
         )
     except urllib.error.HTTPError as e:

@@ -6,14 +6,17 @@
 # Each [[model]] block pulls a model from the Ollama registry by tag. `name` is
 # both the registry tag and the local Ollama name. Re-runs are idempotent.
 
-[[model]]
-name = "hf.co/mradermacher/Gemma-4-Medical-ICD10-i1-GGUF:Q6_K"
+#[[model]]
+#name = "hf.co/mradermacher/Gemma-4-Medical-ICD10-i1-GGUF:Q6_K"
+
+#[[model]]
+#name = "hf.co/rwibawa/DeepSeek-R1-Medical-COT:Q4_K_M"
 
 [[model]]
-name = "hf.co/rwibawa/DeepSeek-R1-Medical-COT:Q4_K_M"
+name = "hf.co/mradermacher/DeepSeek-R1-Medical-COT-GGUF:Q8_0"
 
-[[model]]
-name = "hf.co/Intelligent-Internet/II-Medical-8B-1706-GGUF:Q8_0"
+#[[model]]
+#name = "hf.co/Intelligent-Internet/II-Medical-8B-1706-GGUF:Q8_0"
 
 [[model]]
 name = "hf.co/unsloth/medgemma-27b-text-it-GGUF:Q4_K_S"
@@ -21,7 +24,7 @@ name = "hf.co/unsloth/medgemma-27b-text-it-GGUF:Q4_K_S"
 #[[model]]
 #name = "hf.co/qaootkcx/qwen35-9b-medical:Q4_K_M"
 
-# Embedding model for ICD-10 vector similarity search (1024-dim, pgvector).
+# Embedding model for ICD-10 vector similarity search (2560-dim, pgvector).
 [[model]]
-name = "bge-m3"
+name = "hf.co/Abiray/zembed-1-Q4_K_M-GGUF:Q4_K_M"
 
