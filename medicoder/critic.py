@@ -32,14 +32,14 @@ from __future__ import annotations
 
 import os
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ValidationError, field_validator
 
 from medicoder import proxy
 from medicoder.medical import (
     ModelOutput,
     clean_str_list,
     safe_search,
-    _parse_structured,
+    _extract_json,
     _parse_diagnoses,
 )
 from medicoder.schemas import CriticRound, DiagnoseState, ICD10Match
@@ -62,11 +62,15 @@ _CRITIC_SYSTEM = (
     "- Are there missing diagnoses the models overlooked?\n"
     "- Are there redundant or incorrect diagnoses?\n"
     "- Which specific ICD-10 codes are most appropriate?\n\n"
+    "Use standard ICD-10-CM diagnostic terminology in your diagnoses and "
+    "queries:\n"
+    '- "Malignant neoplasm of [site]" — not "cancer" or "carcinoma"\n'
+    '- "Unspecified" when the site or type is not documented\n\n'
     "Reason freely and thoroughly.  After your analysis, output a JSON "
     "object with these fields:\n"
     '- "reasoning": Your detailed clinical reasoning\n'
-    '- "diagnoses": Your reconciled list of 1-10 concise ICD-10 type '
-    'diagnostic sentences\n'
+    '- "diagnoses": Your reconciled list of 1-10 concise ICD-10-CM '
+    'diagnostic phrases\n'
     '- "queries": Search terms to find ICD-10 codes for any new or changed '
     'diagnoses (these will be embedded and matched against the code '
     'database)\n'
@@ -209,9 +213,13 @@ def diagnose_critic(
         print(f"[critic] model call failed: {e}")
         return [], [], "", False, ""
 
-    result = _parse_structured(raw, CriticOutput)
-    if isinstance(result, CriticOutput):
-        return result.diagnoses, result.queries, result.reasoning, result.done, thinking
+    data = _extract_json(raw)
+    if data is not None:
+        try:
+            result = CriticOutput(**data)
+            return result.diagnoses, result.queries, result.reasoning, result.done, thinking
+        except (ValidationError, TypeError):
+            pass
 
     diagnoses = _parse_diagnoses(raw)
     return diagnoses, [], "", False, thinking

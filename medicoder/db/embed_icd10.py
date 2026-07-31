@@ -6,6 +6,13 @@ the zembed-1 model via LiteLLM's ``/v1/embeddings`` endpoint. Non-billable codes
 are pre-embedded so they are search-ready if they become billable in a future
 release. Skips rows that already have an embedding, so re-runs only fill gaps.
 
+The word *unspecified* is stripped from the embedding input text before
+embedding, because the embedding model penalizes codes containing the term,
+giving them artificially low similarity even to queries using their own
+diagnostic terms (e.g. C539 ``Malignant neoplasm of cervix uteri, unspecified``
+vs query ``Malignant neoplasm of cervix uteri``).  The stored ``long_desc`` is
+unaffected — only the embedding input is cleaned.
+
 Prerequisites:
     - ``icd10_codes`` loaded (``load_icd10.py``).
     - ``embedding`` column + HNSW index created (``02-embedding.sql``).
@@ -19,10 +26,26 @@ Usage::
 from __future__ import annotations
 
 import json
+import re
 import sys
 
 from medicoder import proxy
 from medicoder.db.connect import connect
+
+_UNSPECIFIED_RE = re.compile(r",?\s*unspecified", re.IGNORECASE)
+
+
+def _clean_embed_text(desc: str) -> str:
+    """Strip *unspecified* qualifiers from the embedding input text.
+
+    Examples::
+
+        >>> _clean_embed_text("Malignant neoplasm of cervix uteri, unspecified")
+        'Malignant neoplasm of cervix uteri'
+        >>> _clean_embed_text("Unspecified viral encephalitis")
+        'viral encephalitis'
+    """
+    return _UNSPECIFIED_RE.sub("", desc).strip()
 
 BATCH_SIZE = 128
 
@@ -56,7 +79,7 @@ def main() -> int:
             rows = cur.fetchall()
             if not rows:
                 break
-            texts = [row[1] for row in rows]
+            texts = [_clean_embed_text(row[1]) for row in rows]
             try:
                 vectors = proxy.embed(texts)
             except Exception as e:

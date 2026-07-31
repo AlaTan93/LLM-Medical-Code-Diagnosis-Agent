@@ -99,6 +99,18 @@ class ICD10Match(BaseModel):
     similarity: float
 
 
+class SearchRequest(BaseModel):
+    """Request body for the direct ICD-10 search endpoint.
+
+    Attributes:
+        diagnoses: Diagnosis descriptions to match against ICD-10 codes.
+        k: Maximum codes to return per diagnosis (default 3).
+    """
+
+    diagnoses: list[str]
+    k: int = 3
+
+
 class CodeResponse(BaseModel):
     """Response from the coding pipeline.
 

@@ -5,7 +5,8 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query
 
 from medicoder.db.pool import get_pool
-from medicoder.schemas import ICD10Code
+from medicoder.medical import search_icd10
+from medicoder.schemas import ICD10Code, ICD10Match, SearchRequest
 
 router = APIRouter()
 
@@ -55,3 +56,19 @@ def get_code(order_number: int) -> dict:
     if row is None:
         raise HTTPException(status_code=404, detail="code not found")
     return row  # type: ignore
+
+
+@router.post("/search", response_model=list[ICD10Match])
+def search_codes(body: SearchRequest) -> list[ICD10Match]:
+    """Search ICD-10-CM codes by diagnosis descriptions.
+
+    Runs the hybrid FTS + vector search directly without invoking any
+    medical model.  Useful for testing search quality in isolation.
+
+    Args:
+        body: Request body with diagnosis descriptions and optional ``k``.
+
+    Returns:
+        Matching billable ICD-10-CM codes (best match first).
+    """
+    return search_icd10(body.diagnoses, body.k)
