@@ -294,8 +294,6 @@ see `.env.example` for the full list with comments):
 
 | Variable | Default | Description |
 |---|---|---|
-| `FTS_BOOST` | `0.0` | FTS score boost (0 = pure vector ranking). |
-| `FTS_FLOOR` | `0.50` | Min vec_sim for OR-mode FTS-only candidates. |
 | `SEARCH_CANDIDATE_MULT` | `5` | Over-fetch multiplier for candidates. |
 
 **LLM proxy & embedding:**
@@ -341,7 +339,7 @@ Returns `{"results", "critic_triggered", "critic_rounds", "elapsed_s"}`:
 
 ## Direct ICD-10 search (POST /search)
 
-Runs the hybrid vector + FTS search directly — no medical model invoked. Accepts
+Runs the hybrid vector search — no medical model invoked. Accepts
 pre-written diagnosis descriptions and returns matching billable ICD-10 codes.
 Useful for testing search quality in isolation from LLM diagnosis quality.
 
@@ -394,14 +392,14 @@ cervix uteri*). Stripping the qualifier from the embedding input fixes this
 (similarity rises to ~0.99) without changing the stored `long_desc`. This
 affects ~29k codes (23k billable).
 
-### Full-text search index
+### Full-text search index (historical)
 
-`docker/postgres/03-fts.sql` adds a generated `search_tsv` tsvector column
-(combining `short_desc` + `long_desc`) and a GIN index over billable codes.
-This enables a lexical search alongside the vector search — FTS candidates are
-fetched and merged with vector candidates, with an adjustable score boost
-(`_FTS_BOOST` in `medical.py`, default `0.0` = pure vector ranking). The FTS
-infrastructure is preserved for future tuning.
+`docker/postgres/03-fts.sql` adds a generated `search_tsv` tsvector column and
+GIN index. FTS was integrated alongside pgvector for hybrid search but was
+removed after replay testing showed net-negative impact. The "unspecified"
+embedding problem it addressed was solved by embedding text cleaning instead.
+The SQL artifact remains in the schema for documentation; no application code
+references it.
 
 ## Evaluation & analysis tools
 

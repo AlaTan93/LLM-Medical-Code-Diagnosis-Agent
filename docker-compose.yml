@@ -109,9 +109,7 @@ services:
       CRITIC_TEMP: ${CRITIC_TEMP:-0.25}
       CRITIC_MAX_TOKENS: ${CRITIC_MAX_TOKENS:-8192}
       CRITIC_MAX_TOOL_CALLS: ${CRITIC_MAX_TOOL_CALLS:-8}
-      # Search tuning (medicoder/medical.py — hybrid vector + FTS).
-      FTS_BOOST: ${FTS_BOOST:-0.0}
-      FTS_FLOOR: ${FTS_FLOOR:-0.50}
+      # Search tuning (medicoder/medical.py — vector similarity).
       SEARCH_CANDIDATE_MULT: ${SEARCH_CANDIDATE_MULT:-5}
       # Embedding batch size (medicoder/db/embed_icd10.py).
       EMBED_BATCH_SIZE: ${EMBED_BATCH_SIZE:-128}

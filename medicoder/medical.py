@@ -3,7 +3,7 @@
 - :func:`diagnose` — forwards clinical text to a medical model and returns
   1-10 independent diagnoses plus the model's clinical reasoning.
 - :func:`search_icd10` — batch-embeds multiple diagnosis queries and runs a
-  hybrid vector-primary + FTS-boost search over billable ICD-10-CM codes.
+  pgvector HNSW cosine-similarity search over billable ICD-10-CM codes.
 """
 
 from __future__ import annotations
@@ -28,8 +28,6 @@ _MAX_TEMP = float(os.environ.get("DIAGNOSE_MAX_TEMP", "0.3"))
 _DIAGNOSE_TOKENS = int(os.environ.get("DIAGNOSE_MAX_TOKENS", "4096"))
 _DIAGNOSE_CONCISE_TOKENS = int(os.environ.get("DIAGNOSE_CONCISE_TOKENS", "2048"))
 
-_FTS_BOOST = float(os.environ.get("FTS_BOOST", "0.0"))
-_FTS_FLOOR = float(os.environ.get("FTS_FLOOR", "0.50"))
 _CANDIDATE_MULT = int(os.environ.get("SEARCH_CANDIDATE_MULT", "5"))
 
 _DIAGNOSE_SYSTEM = (
@@ -311,23 +309,6 @@ def safe_search(diagnoses: list[str], k: int = 3) -> list[ICD10Match]:
         return []
 
 
-@dataclass
-class _Candidate:
-    """A merged search candidate with vector and/or FTS signals.
-
-    Used by :func:`_merge_and_score` to unify results from independent
-    vector and FTS queries into a single ranked list.
-    """
-
-    code: str
-    short_desc: str
-    long_desc: str
-    vec_sim: float = 0.0
-    fts_rank: float = 0.0
-    in_vector: bool = False
-    in_fts: bool = False
-
-
 def _fetch_vector(
     conn, query_vec_json: str, limit: int
 ) -> list[dict]:
@@ -352,207 +333,21 @@ def _fetch_vector(
     ).fetchall()  # type: ignore
 
 
-def _fetch_fts_and(
-    conn, query_text: str, query_vec_json: str, limit: int
-) -> list[dict]:
-    """Full-text search in **AND** mode — all query lexemes must appear.
-
-    Vector similarity is computed alongside FTS rank for later re-scoring.
-
-    Returns rows with keys ``code``, ``short_desc``, ``long_desc``,
-    ``fts_rank``, ``vec_sim``.
-    """
-    return conn.execute(
-        """SELECT code, short_desc, long_desc,
-                  ts_rank_cd(search_tsv,
-                             plainto_tsquery('english', %s)) AS fts_rank,
-                  1 - (embedding <=> %s::halfvec) AS vec_sim
-           FROM icd10_codes
-           WHERE is_billable
-             AND search_tsv @@ plainto_tsquery('english', %s)
-             AND embedding IS NOT NULL
-           ORDER BY fts_rank DESC
-           LIMIT %s""",
-        (query_text, query_vec_json, query_text, limit),
-    ).fetchall()  # type: ignore
-
-
-def _fetch_fts_or(
-    conn, query_text: str, query_vec_json: str, limit: int
-) -> list[dict]:
-    """Full-text search in **OR** mode — any query lexeme may appear.
-
-    Fallback for AND-mode stemming mismatches (e.g. "uterine" stems to
-    ``uterin`` while the ICD-10 description uses ``uteri``).
-
-    Returns rows with keys ``code``, ``short_desc``, ``long_desc``,
-    ``fts_rank``, ``vec_sim``.
-    """
-    return conn.execute(
-        """WITH q AS (
-               SELECT to_tsquery('english',
-                   regexp_replace(
-                       regexp_replace(
-                           plainto_tsquery('english', %s)::text,
-                           '''', '', 'g'),
-                       ' & ', ' | ', 'g')
-               ) AS ts_or
-           )
-           SELECT c.code, c.short_desc, c.long_desc,
-                  ts_rank_cd(c.search_tsv, q.ts_or) AS fts_rank,
-                  1 - (c.embedding <=> %s::halfvec) AS vec_sim
-           FROM icd10_codes c, q
-           WHERE c.is_billable
-             AND c.search_tsv @@ q.ts_or
-             AND c.embedding IS NOT NULL
-           ORDER BY fts_rank DESC
-           LIMIT %s""",
-        (query_text, query_vec_json, limit),
-    ).fetchall()  # type: ignore
-
-
-def _fetch_fts(
-    conn, query_text: str, query_vec_json: str, limit: int
-) -> tuple[list[dict], bool]:
-    """Fetch FTS candidates, falling back from AND to OR mode.
-
-    AND mode requires all lexemes to match — these are exact-term hits
-    that bypass the :data:`_FTS_FLOOR` in :func:`_merge_and_score`.
-    When AND fails (stemming mismatches), OR mode catches partial
-    matches, but those are subject to the floor to filter noise.
-
-    Returns ``(rows, is_and_mode)``.
-    """
-    rows = _fetch_fts_and(conn, query_text, query_vec_json, limit)
-    if rows:
-        return rows, True
-    rows = _fetch_fts_or(conn, query_text, query_vec_json, limit)
-    return rows, False
-
-
-def _merge_and_score(
-    vec_rows: list[dict], fts_rows: list[dict], k: int,
-    fts_is_and: bool = True,
-) -> list[ICD10Match]:
-    """Merge vector + FTS candidates using **vector-primary, FTS-boost** scoring.
-
-    Scoring rules:
-
-    - **Vector + FTS agreement** (code in both result sets):
-      ``vec_sim + _FTS_BOOST * norm_fts`` — the FTS match confirms the
-      semantic match, pushing exact-term codes above near-misses.
-    - **Vector only** (code not in FTS results): ``vec_sim`` unchanged.
-    - **FTS only, AND mode** (exact term match, not in vector top-k):
-      ``vec_sim + _FTS_BOOST * norm_fts``.  No floor — AND matches are
-      high-confidence exact hits whose only issue is low embedding
-      similarity (e.g. "unspecified" codes).
-    - **FTS only, OR mode** (partial/stemming match): included only if
-      ``vec_sim >= _FTS_FLOOR``, scored with ``_FTS_BOOST``.  Codes below
-      the floor are excluded — this filters semantically irrelevant
-      partial matches.
-
-    Args:
-        vec_rows: Candidates from :func:`_fetch_vector`.
-        fts_rows: Candidates from :func:`_fetch_fts`.
-        k: Maximum matches to return.
-        fts_is_and: Whether FTS rows came from AND mode (exact match).
-
-    Returns:
-        Top-k :class:`ICD10Match` objects sorted by score descending.
-    """
-    cands: dict[str, _Candidate] = {}
-    for r in vec_rows:
-        cands[r["code"]] = _Candidate(  # type: ignore
-            code=r["code"],
-            short_desc=r["short_desc"],
-            long_desc=r["long_desc"],
-            vec_sim=float(r["vec_sim"]),
-            in_vector=True,
-        )
-    for r in fts_rows:
-        code = r["code"]  # type: ignore
-        if code in cands:
-            cands[code].fts_rank = float(r["fts_rank"])  # type: ignore
-            cands[code].in_fts = True
-        else:
-            cands[code] = _Candidate(
-                code=code,
-                short_desc=r["short_desc"],  # type: ignore
-                long_desc=r["long_desc"],  # type: ignore
-                vec_sim=float(r["vec_sim"]),  # type: ignore
-                fts_rank=float(r["fts_rank"]),  # type: ignore
-                in_fts=True,
-            )
-
-    max_fts = max(
-        (c.fts_rank for c in cands.values() if c.fts_rank > 0), default=0.0
-    )
-
-    scored: list[tuple[_Candidate, float]] = []
-    for c in cands.values():
-        norm_fts = c.fts_rank / max_fts if max_fts > 0 and c.fts_rank > 0 else 0.0
-
-        if c.in_vector and c.in_fts:
-            score = c.vec_sim + _FTS_BOOST * norm_fts
-        elif c.in_vector:
-            score = c.vec_sim
-        elif fts_is_and or c.vec_sim >= _FTS_FLOOR:
-            score = c.vec_sim + _FTS_BOOST * norm_fts
-        else:
-            continue
-
-        scored.append((c, score))
-
-    scored.sort(key=lambda x: x[1], reverse=True)
-
-    return [
-        ICD10Match(
-            code=c.code,
-            short_desc=c.short_desc,
-            long_desc=c.long_desc,
-            similarity=round(score, 4),
-        )
-        for c, score in scored[:k]
-    ]
-
-
 def search_icd10(queries: list[str], k: int = 3) -> list[ICD10Match]:
     """Find billable ICD-10-CM codes matching multiple diagnosis queries.
 
-    Uses **vector-primary, FTS-boost** hybrid search:
-
-    1. **Vector search** — pgvector HNSW cosine-similarity over code
-       embeddings.  Returns ``k * _CANDIDATE_MULT`` candidates.  This
-       is the primary signal: semantic similarity ranks the most
-       relevant codes first.
-    2. **FTS search** — PostgreSQL full-text search (AND → OR fallback)
-       over code descriptions.  Returns up to ``k * _CANDIDATE_MULT``
-       candidates with ``ts_rank_cd`` and vector similarity computed
-       in the same query.
-    3. **Merge & score** — candidates appearing in both result sets get
-       a score boost (``_FTS_BOOST * norm_fts``).  Vector-only candidates
-       keep their raw ``vec_sim``.  FTS-only candidates are included only
-       if their ``vec_sim`` exceeds ``_FTS_FLOOR`` (OR mode) or bypass
-      the floor (AND mode — exact term matches).
-
-    When ``_FTS_BOOST = 0`` (default), FTS candidates are fetched but
-    do not affect ranking — results are identical to pure vector search.
-    The FTS infrastructure is preserved for future use with Z-code
-    filtering or tuned boost values.
-
-    This preserves the strengths of vector search (semantic matching)
-    while letting FTS boost exact-term matches that embedding models
-    penalise (e.g. "unspecified" codes like C539).
-
-    Results are deduplicated by code (keeping the highest score) across
-    all queries and sorted by score descending.
+    Each query is embedded (batched in one API call) and matched against
+    code embeddings via pgvector HNSW cosine-similarity.  The top
+    ``k * _CANDIDATE_MULT`` candidates per query are fetched, then
+    deduplicated across queries (keeping the highest similarity), and the
+    top *k* are returned.
 
     Args:
         queries: Diagnosis descriptions to match against ICD-10 codes.
         k: Maximum codes to return per query (default 3).
 
     Returns:
-        Deduplicated matching codes ranked by score (highest first).
+        Deduplicated matching codes ranked by similarity (highest first).
     """
     if not queries:
         return []
@@ -563,12 +358,17 @@ def search_icd10(queries: list[str], k: int = 3) -> list[ICD10Match]:
 
     with get_pool().connection() as conn:
         conn.execute("SET LOCAL hnsw.ef_search = 200")
-        for query_text, vec in zip(queries, vectors, strict=False):
+        for _, vec in zip(queries, vectors, strict=False):
             qv = json.dumps(vec)
-            vec_rows = _fetch_vector(conn, qv, cand_k)
-            fts_rows, fts_is_and = _fetch_fts(conn, query_text, qv, cand_k)
-            for m in _merge_and_score(vec_rows, fts_rows, k, fts_is_and):
-                if m.code not in seen or m.similarity > seen[m.code].similarity:
-                    seen[m.code] = m
+            for r in _fetch_vector(conn, qv, cand_k):
+                code = r["code"]
+                sim = round(float(r["vec_sim"]), 4)
+                if code not in seen or sim > seen[code].similarity:
+                    seen[code] = ICD10Match(
+                        code=code,
+                        short_desc=r["short_desc"],
+                        long_desc=r["long_desc"],
+                        similarity=sim,
+                    )
 
     return sorted(seen.values(), key=lambda m: m.similarity, reverse=True)

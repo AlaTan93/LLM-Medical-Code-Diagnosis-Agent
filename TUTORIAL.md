@@ -1833,3 +1833,107 @@ command: ["python", "-m", "debugpy", "--listen", "0.0.0.0:5678",
 | `analyze_cases.py` | Case difficulty analysis across eval runs |
 | `.env.example` | All tunable parameters with comments |
 | `models.toml` | Model registry for auto-pull |
+
+---
+
+## Appendix: Full-Text Search — Tried and Retired
+
+### What FTS is
+
+PostgreSQL has built-in [full-text search](https://www.postgresql.org/docs/current/textsearch.html)
+(FTS) — a lexical search engine that tokenises text into lexemes, indexes them
+with a GIN index, and ranks matches with `ts_rank_cd`. Unlike vector similarity
+(which captures *semantic* meaning), FTS matches *exact words and phrases*.
+
+In this project, FTS was integrated alongside pgvector to create a hybrid
+search. A generated `tsvector` column combined `short_desc` and `long_desc`:
+
+```sql
+search_tsv tsvector GENERATED ALWAYS AS (
+    to_tsvector('english',
+        coalesce(short_desc, '') || ' ' || coalesce(long_desc, ''))
+) STORED;
+```
+
+### Why it was considered
+
+The embedding model penalises codes containing the word "unspecified". For
+example, C539 (*Malignant neoplasm of cervix uteri, unspecified*) scored only
+0.48 vector similarity to the query *Malignant neoplasm of cervix uteri* —
+below semantically related but clinically wrong codes like Z8541 (*Personal
+history of malignant neoplasm of cervix uteri*).
+
+FTS was expected to fix this: an exact-term match on "malignant", "neoplasm",
+"cervix", and "uteri" would surface C539 regardless of its embedding penalty.
+
+### What it was doing
+
+On every search, the pipeline ran three DB queries per diagnosis:
+
+1. **Vector search** — HNSW cosine-similarity, fetching `k × 5` candidates
+2. **FTS AND search** — `plainto_tsquery` requiring all lexemes to match
+3. **FTS OR fallback** — (only if AND returned nothing) any lexume may match
+
+Results were merged with a scoring formula:
+
+```
+score = vec_sim + FTS_BOOST × normalized_ts_rank
+```
+
+Codes in both result sets got a boost; FTS-only codes were included if their
+vector similarity exceeded a floor (`FTS_FLOOR = 0.50`). The infrastructure
+totalled ~170 lines: `_Candidate` dataclass, `_fetch_fts_and()`,
+`_fetch_fts_or()`, `_fetch_fts()`, and `_merge_and_score()`.
+
+### What happened
+
+Extensive replay testing (787 stored diagnoses across 8 eval files) measured
+the impact of different `FTS_BOOST` values:
+
+| `FTS_BOOST` | Improved | Regressed | Net |
+|---|---|---|---|
+| 0.0 (baseline) | — | — | — |
+| 0.15 | 20 | 30 | -10 |
+| 0.40 | 18 | 32 | -14 |
+
+FTS pushed semantically similar but clinically wrong codes above correct ones.
+For example, D508 (*Other iron deficiency anemia*) was boosted above D509
+(*Iron deficiency anemia, unspecified*) because both contain "iron deficiency
+anemia" — the FTS boost rewarded the lexical match without regard for which
+code is the correct billable target.
+
+The root cause was then addressed directly: **embedding text cleaning**
+(`_clean_embed_text` in `embed_icd10.py`) strips the word "unspecified" from
+the embedding input. C539's similarity rose from 0.48 to 0.99 without any FTS.
+This made the hybrid search unnecessary.
+
+### Why it was removed
+
+With `FTS_BOOST` set to 0.0, FTS was fetching candidates that had near-zero
+impact on final rankings (their raw `vec_sim` placed them below vector
+candidates). The infrastructure added:
+
+- **~170 lines** of merge/scoring code (`_Candidate`, `_fetch_fts_and`,
+  `_fetch_fts_or`, `_fetch_fts`, `_merge_and_score`)
+- **2 extra DB round-trips** per search query (FTS AND → FTS OR)
+- **2 env vars** (`FTS_BOOST`, `FTS_FLOOR`) with associated config in
+  `.env.example`, `docker-compose.yml`, and the README
+
+Removing it simplified `search_icd10` from a 57-line multi-source merge to a
+~20-line pure vector search, and reduced per-query DB round-trips from 3 to 1.
+
+The agentic critic's own tools (`_tool_lookup`, `_tool_get`) can compensate
+for any edge cases where exact-term browsing is needed — and they do so on
+demand rather than on every search.
+
+### What remains
+
+The `search_tsv` generated column and GIN index (`docker/postgres/03-fts.sql`)
+remain in the database schema. They are:
+
+- **Harmless** — Postgres maintains generated columns automatically; the GIN
+  index adds ~5 MB of storage but zero query overhead when not referenced
+- **Documented** — they show the engineering journey from hybrid to pure
+  vector search
+
+No application code references `search_tsv` or any FTS function.
