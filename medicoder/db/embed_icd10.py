@@ -26,6 +26,7 @@ Usage::
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 
@@ -47,7 +48,7 @@ def _clean_embed_text(desc: str) -> str:
     """
     return _UNSPECIFIED_RE.sub("", desc).strip()
 
-BATCH_SIZE = 128
+BATCH_SIZE = int(os.environ.get("EMBED_BATCH_SIZE", "128"))
 
 COUNT_PENDING_SQL = "SELECT count(*) FROM icd10_codes WHERE embedding IS NULL"
 SELECT_BATCH_SQL = (

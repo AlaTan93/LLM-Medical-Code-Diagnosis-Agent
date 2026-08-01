@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass
 
@@ -18,18 +19,18 @@ from medicoder import proxy
 from medicoder.db.pool import get_pool
 from medicoder.schemas import ICD10Match
 
-_MAX_DIAGNOSES = 10
+_MAX_DIAGNOSES = int(os.environ.get("MAX_DIAGNOSES", "10"))
 
-_MAX_RETRIES = 4
-_TEMP_INCREMENT = 0.05
-_MAX_TEMP = 0.3
+_MAX_RETRIES = int(os.environ.get("DIAGNOSE_MAX_RETRIES", "4"))
+_TEMP_INCREMENT = float(os.environ.get("DIAGNOSE_TEMP_INCREMENT", "0.05"))
+_MAX_TEMP = float(os.environ.get("DIAGNOSE_MAX_TEMP", "0.3"))
 
-_DIAGNOSE_TOKENS = 4096
-_DIAGNOSE_CONCISE_TOKENS = 2048
+_DIAGNOSE_TOKENS = int(os.environ.get("DIAGNOSE_MAX_TOKENS", "4096"))
+_DIAGNOSE_CONCISE_TOKENS = int(os.environ.get("DIAGNOSE_CONCISE_TOKENS", "2048"))
 
-_FTS_BOOST = 0.0          # Score boost for FTS agreement (0 = pure vector ranking)
-_FTS_FLOOR = 0.50         # Min vec_sim for OR-mode FTS-only candidates
-_CANDIDATE_MULT = 5       # Over-fetch multiplier for candidate retrieval
+_FTS_BOOST = float(os.environ.get("FTS_BOOST", "0.0"))
+_FTS_FLOOR = float(os.environ.get("FTS_FLOOR", "0.50"))
+_CANDIDATE_MULT = int(os.environ.get("SEARCH_CANDIDATE_MULT", "5"))
 
 _DIAGNOSE_SYSTEM = (
     "Analyze the patient's clinical presentation, then produce diagnoses "

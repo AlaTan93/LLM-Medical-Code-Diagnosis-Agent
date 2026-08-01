@@ -11,9 +11,9 @@ import os
 import re
 import urllib.request
 
-CHAT_TIMEOUT = 300.0
-EMBED_TIMEOUT = 120.0
-MAX_TOKENS = 8192
+CHAT_TIMEOUT = float(os.environ.get("CHAT_TIMEOUT", "300.0"))
+EMBED_TIMEOUT = float(os.environ.get("EMBED_TIMEOUT", "120.0"))
+MAX_TOKENS = int(os.environ.get("MAX_TOKENS", "8192"))
 
 _THINK_RE = re.compile(r"<think>(.*?)</think>\s*", re.DOTALL)
 

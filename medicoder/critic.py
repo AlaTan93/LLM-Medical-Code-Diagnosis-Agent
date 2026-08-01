@@ -47,8 +47,8 @@ from medicoder.schemas import CriticRound, DiagnoseState, ICD10Match
 # -- Configuration ----------------------------------------------------------
 
 CRITIC_MODEL = os.environ.get("CRITIC_MODEL", "medgemma-27b-q4_k_s")
-CRITIC_TEMP = 0.25
-CRITIC_MAX_TOKENS = 8192
+CRITIC_TEMP = float(os.environ.get("CRITIC_TEMP", "0.25"))
+CRITIC_MAX_TOKENS = int(os.environ.get("CRITIC_MAX_TOKENS", "8192"))
 _MAX_CRITIC_ROUNDS = int(os.environ.get("MAX_CRITIC_ROUNDS", "2"))
 
 # -- System prompt ----------------------------------------------------------

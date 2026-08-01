@@ -265,7 +265,10 @@ The critic prompt is designed to give the model freedom to reason before
 producing structured output — analysis instructions come first, the JSON
 format constraint comes last.
 
-Configure via environment variable (`.env`):
+All tunable parameters are configurable via environment variables (`.env` —
+see `.env.example` for the full list with comments):
+
+**Models & critic loop:**
 
 | Variable | Default | Description |
 |---|---|---|
@@ -273,6 +276,36 @@ Configure via environment variable (`.env`):
 | `MODEL_B` | `deepseek-r1-medical-cot` | Second medical model (LiteLLM alias). |
 | `CRITIC_MODEL` | `medgemma-27b-q4_k_s` | Critic model for the reconciliation loop. |
 | `MAX_CRITIC_ROUNDS` | `2` | Max reconciliation rounds (0 = disabled). |
+| `CRITIC_TEMP` | `0.25` | Critic sampling temperature. |
+| `CRITIC_MAX_TOKENS` | `8192` | Critic token budget per round. |
+
+**Diagnose pipeline:**
+
+| Variable | Default | Description |
+|---|---|---|
+| `MAX_DIAGNOSES` | `10` | Max diagnoses a model can output per case. |
+| `DIAGNOSE_MAX_RETRIES` | `4` | Max retry attempts on parse failure. |
+| `DIAGNOSE_TEMP_INCREMENT` | `0.05` | Temperature increment per retry. |
+| `DIAGNOSE_MAX_TEMP` | `0.3` | Temperature cap during retries. |
+| `DIAGNOSE_MAX_TOKENS` | `4096` | Token budget for first attempt. |
+| `DIAGNOSE_CONCISE_TOKENS` | `2048` | Token budget for retry attempts. |
+
+**Search tuning:**
+
+| Variable | Default | Description |
+|---|---|---|
+| `FTS_BOOST` | `0.0` | FTS score boost (0 = pure vector ranking). |
+| `FTS_FLOOR` | `0.50` | Min vec_sim for OR-mode FTS-only candidates. |
+| `SEARCH_CANDIDATE_MULT` | `5` | Over-fetch multiplier for candidates. |
+
+**LLM proxy & embedding:**
+
+| Variable | Default | Description |
+|---|---|---|
+| `CHAT_TIMEOUT` | `300.0` | Timeout for chat completions (seconds). |
+| `EMBED_TIMEOUT` | `120.0` | Timeout for embeddings (seconds). |
+| `MAX_TOKENS` | `8192` | Default max_tokens (overridden by callers). |
+| `EMBED_BATCH_SIZE` | `128` | Rows per embedding API call. |
 
 Disable per-request with `"enable_critic": false`:
 
@@ -487,13 +520,13 @@ docker/postgres/02-embedding.sql pgvector embedding column + HNSW index (2560-di
 docker/postgres/03-fts.sql       generated tsvector column + GIN index for hybrid search
 docker/litellm/config.yaml       LiteLLM alias -> upstream routing + DB logging
 docker/litellm/log_callback.py   custom callback -> llm_call_log (prompts/thinking/output/tools)
-medicoder/proxy.py               shared LiteLLM client: chat_completion() -> (output, thinking), embed(), extract_thinking()
-medicoder/medical.py             shared pipeline: diagnose(), search_icd10() (hybrid vector+FTS), ModelOutput, _parse_diagnosis_output()
-medicoder/critic.py              debate-critic loop: diagnose_critic(), graph nodes (should_critic, critic_think, critic_search)
+medicoder/proxy.py               shared LiteLLM client: chat_completion() -> (output, thinking), embed(), extract_thinking() — all timeouts/token limits env-driven
+medicoder/medical.py             shared pipeline: diagnose(), search_icd10() (hybrid vector+FTS), ModelOutput, _parse_diagnosis_output() — all tunables env-driven
+medicoder/critic.py              debate-critic loop: diagnose_critic(), graph nodes (should_critic, critic_think, critic_search) — temp/tokens/rounds env-driven
 medicoder/schemas.py             Pydantic models (ICD10Code, ICD10Match, SearchRequest, DiagnoseState, DiagnosisResult, CriticRound, etc.)
 medicoder/db/connect.py          shared CLI Postgres connection (retried)
 medicoder/db/load_icd10.py       fixed-width -> COPY loader
-medicoder/db/embed_icd10.py      idempotent bulk embedder (zembed-1 via LiteLLM, strips "unspecified" from embedding text)
+medicoder/db/embed_icd10.py      idempotent bulk embedder (zembed-1 via LiteLLM, strips "unspecified" from embedding text, batch size env-driven)
 medicoder/db/pool.py             psycopg connection pool (lifespan-managed)
 medicoder/routes/icd10.py        GET /codes, POST /search — ICD-10 lookup + direct vector search
 medicoder/routes/llm.py          POST /test/{model} — call a LiteLLM alias

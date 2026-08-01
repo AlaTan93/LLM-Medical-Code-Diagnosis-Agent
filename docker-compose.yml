@@ -90,8 +90,30 @@ services:
       ICD10_FILE: /app/icd10cm_order_2026.txt
       # Points at the local LiteLLM proxy (alias -> upstream LLM).
       LLM_BASE_URL: ${LLM_BASE_URL:-http://litellm:4000/v1}
-      # Max debate-critic reconciliation rounds on /diagnose (0 = disabled).
+      # LLM proxy timeouts & token limits (medicoder/proxy.py).
+      CHAT_TIMEOUT: ${CHAT_TIMEOUT:-300.0}
+      EMBED_TIMEOUT: ${EMBED_TIMEOUT:-120.0}
+      MAX_TOKENS: ${MAX_TOKENS:-8192}
+      # Diagnose pipeline (medicoder/medical.py).
+      MAX_DIAGNOSES: ${MAX_DIAGNOSES:-10}
+      DIAGNOSE_MAX_RETRIES: ${DIAGNOSE_MAX_RETRIES:-4}
+      DIAGNOSE_TEMP_INCREMENT: ${DIAGNOSE_TEMP_INCREMENT:-0.05}
+      DIAGNOSE_MAX_TEMP: ${DIAGNOSE_MAX_TEMP:-0.3}
+      DIAGNOSE_MAX_TOKENS: ${DIAGNOSE_MAX_TOKENS:-4096}
+      DIAGNOSE_CONCISE_TOKENS: ${DIAGNOSE_CONCISE_TOKENS:-2048}
+      # Debate-critic loop (medicoder/critic.py + diagnose.py).
+      MODEL_A: ${MODEL_A:-medgemma-27b-q4_k_s}
+      MODEL_B: ${MODEL_B:-deepseek-r1-medical-cot}
+      CRITIC_MODEL: ${CRITIC_MODEL:-medgemma-27b-q4_k_s}
       MAX_CRITIC_ROUNDS: ${MAX_CRITIC_ROUNDS:-2}
+      CRITIC_TEMP: ${CRITIC_TEMP:-0.25}
+      CRITIC_MAX_TOKENS: ${CRITIC_MAX_TOKENS:-8192}
+      # Search tuning (medicoder/medical.py — hybrid vector + FTS).
+      FTS_BOOST: ${FTS_BOOST:-0.0}
+      FTS_FLOOR: ${FTS_FLOOR:-0.50}
+      SEARCH_CANDIDATE_MULT: ${SEARCH_CANDIDATE_MULT:-5}
+      # Embedding batch size (medicoder/db/embed_icd10.py).
+      EMBED_BATCH_SIZE: ${EMBED_BATCH_SIZE:-128}
       # DeepAgent models are reached via LangChain's `openai:` provider, which
       # reads OPENAI_BASE_URL / OPENAI_API_KEY. LiteLLM enforces no key, so a
       # dummy value is fine; base URL mirrors LLM_BASE_URL.
