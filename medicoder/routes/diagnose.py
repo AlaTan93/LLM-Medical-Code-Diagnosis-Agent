@@ -36,8 +36,7 @@ from fastapi import APIRouter
 from langgraph.graph import END, START, StateGraph
 
 from medicoder.critic import (
-    critic_search,
-    critic_think,
+    critic_agent,
     should_continue_critic,
     should_critic,
 )
@@ -95,8 +94,7 @@ def _build_graph():  # type: ignore[no-untyped-def]
     g.add_node("diagnose_a", diagnose_a)
     g.add_node("diagnose_b", diagnose_b)
     g.add_node("search", search_both)
-    g.add_node("critic_think", critic_think)
-    g.add_node("critic_search", critic_search)
+    g.add_node("critic_agent", critic_agent)
 
     # Fan-out: both diagnose nodes run in parallel from START.
     g.add_edge(START, "diagnose_a")
@@ -106,16 +104,15 @@ def _build_graph():  # type: ignore[no-untyped-def]
     g.add_edge("diagnose_a", "search")
     g.add_edge("diagnose_b", "search")
 
-    # Conditional: trigger critic loop or skip to END.
+    # Conditional: trigger critic agent or skip to END.
     g.add_conditional_edges("search", should_critic, {
-        "critic": "critic_think",
+        "critic": "critic_agent",
         "end": END,
     })
 
-    # Critic loop: think -> search -> continue?
-    g.add_edge("critic_think", "critic_search")
-    g.add_conditional_edges("critic_search", should_continue_critic, {
-        "loop": "critic_think",
+    # Critic loop: agent runs (with internal tool iterations) then check.
+    g.add_conditional_edges("critic_agent", should_continue_critic, {
+        "loop": "critic_agent",
         "end": END,
     })
 

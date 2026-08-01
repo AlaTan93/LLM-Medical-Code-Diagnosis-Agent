@@ -102,12 +102,13 @@ def aggregate() -> list[CaseAgg]:
                 entries.append(detail["critic"])
 
             for e in entries:
+                m = e.get("metrics", e)
                 agg.num_evals += 1
-                if e.get("top1_hit"):
+                if m.get("top1_hit"):
                     agg.top1_hits += 1
-                if e.get("top3_hit"):
+                if m.get("top3_hit"):
                     agg.top3_hits += 1
-                agg.recall_sum += e.get("recall", 0.0)
+                agg.recall_sum += m.get("recall", 0.0)
 
     return list(aggregated.values())
 

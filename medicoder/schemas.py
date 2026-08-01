@@ -173,12 +173,14 @@ class CriticRound(BaseModel):
         round: Zero-indexed round number.
         reasoning: The critic's clinical reasoning for this round.
         diagnoses: The critic's reconciled diagnoses (1-10 entries).
-        queries: Free-form search terms the critic suggested for finding
-            ICD-10 codes (used alongside diagnoses for vector search).
-        codes: ICD-10 matches found for this round's diagnoses + queries.
+        queries: Free-form search terms the critic suggested (legacy field,
+            kept for backward compatibility with older eval output files).
+        codes: ICD-10 matches found for this round's diagnoses.
         done: Whether the critic signalled confidence (``true`` ends the loop).
         thinking: The critic model's raw ``<think>`` block content (empty
             string for non-reasoning models).
+        tool_calls: Audit trail of tool calls made during the agentic loop.
+            Each entry is ``{"tool": ..., "params": ..., "result_preview": ...}``.
     """
 
     round: int
@@ -188,6 +190,7 @@ class CriticRound(BaseModel):
     codes: list[ICD10Match] = []
     done: bool = False
     thinking: str = ""
+    tool_calls: list[dict] = []
 
 
 class DualDiagnoseResponse(BaseModel):

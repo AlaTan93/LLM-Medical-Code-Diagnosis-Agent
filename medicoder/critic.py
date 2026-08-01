@@ -1,40 +1,43 @@
-"""Debate-critic loop: reconcile two models' diagnoses via an LLM critic.
+"""Agentic debate-critic with read-only database access.
 
 When the two medical models in the dual-diagnosis pipeline disagree (different
-diagnosis count or different top-1 ICD-10 code), a critic model reviews both
-models' outputs and produces reconciled diagnoses over one or more rounds.
+diagnosis count or different top-1 ICD-10 code), a critic agent reviews both
+models' outputs and iteratively queries the ICD-10-CM code database to find
+the best matching codes before producing reconciled diagnoses.
 
-This module contains everything critic-related:
+The critic has access to three **read-only** tools:
 
-* **Business logic** — :func:`diagnose_critic` calls the critic model;
-  :func:`build_critic_context` assembles its prompt.
-* **Graph nodes** — :func:`should_critic`, :func:`critic_think`,
-  :func:`critic_search`, :func:`should_continue_critic` are LangGraph node /
-  routing functions wired into the state graph by ``routes/diagnose.py``.
+* **search** — semantic + FTS search by diagnosis description
+* **lookup** — browse codes by prefix (explore a code family)
+* **get** — get full details for a specific code
 
-The graph wiring itself lives in ``routes/diagnose.py``::
+The agent loops internally (up to ``CRITIC_MAX_TOOL_CALLS`` iterations per
+round), calling tools and seeing results before committing to a final answer.
+The outer ``MAX_CRITIC_ROUNDS`` loop is retained as a safety net.
+
+Graph wiring lives in ``routes/diagnose.py``::
 
     search ──→ should_critic?
                  ╱        ╲
                no          yes
                 │            │
-               END   critic_think ──→ critic_search
-                                ╱          ╲
-                       should_continue_critic?
-                           ╱          ╲
-                        loop            end
-                         │                │
-                  critic_think          END
-                    (next round)
+               END     critic_agent ──→ should_continue_critic?
+                                 ╱          ╲
+                              loop            end
+                               │                │
+                        critic_agent          END
+                         (next round)
 """
 
 from __future__ import annotations
 
+import json
 import os
 
 from pydantic import BaseModel, ValidationError, field_validator
 
 from medicoder import proxy
+from medicoder.db.pool import get_pool
 from medicoder.medical import (
     ModelOutput,
     clean_str_list,
@@ -50,56 +53,69 @@ CRITIC_MODEL = os.environ.get("CRITIC_MODEL", "medgemma-27b-q4_k_s")
 CRITIC_TEMP = float(os.environ.get("CRITIC_TEMP", "0.25"))
 CRITIC_MAX_TOKENS = int(os.environ.get("CRITIC_MAX_TOKENS", "8192"))
 _MAX_CRITIC_ROUNDS = int(os.environ.get("MAX_CRITIC_ROUNDS", "2"))
+_MAX_TOOL_CALLS = int(os.environ.get("CRITIC_MAX_TOOL_CALLS", "8"))
+
+_MAX_K = 10
+_MAX_LOOKUP = 50
 
 # -- System prompt ----------------------------------------------------------
 
-_CRITIC_SYSTEM = (
-    "You are a senior clinical coding reviewer. Two independent medical "
-    "models analyzed the same patient case and produced different "
-    "diagnoses.\n\n"
-    "Carefully analyze where the models agree and disagree:\n"
-    "- Which diagnoses are well-supported by the clinical text?\n"
-    "- Are there missing diagnoses the models overlooked?\n"
-    "- Are there redundant or incorrect diagnoses?\n"
-    "- Which specific ICD-10 codes are most appropriate?\n\n"
-    "Use standard ICD-10-CM diagnostic terminology in your diagnoses and "
-    "queries:\n"
-    '- "Malignant neoplasm of [site]" — not "cancer" or "carcinoma"\n'
-    '- "Unspecified" when the site or type is not documented\n\n'
-    "Reason freely and thoroughly.  After your analysis, output a JSON "
-    "object with these fields:\n"
+_CRITIC_AGENT_SYSTEM = (
+    "You are a senior clinical coding reviewer with direct read-only access "
+    "to an ICD-10-CM code database. Two independent medical models analyzed "
+    "the same patient case and produced different diagnoses.\n\n"
+    "You can query the code database at any time using these tools:\n\n"
+    '1. search — Find codes matching diagnosis descriptions (semantic + FTS):\n'
+    '   {"tool": "search", "diagnoses": ["Malignant neoplasm of prostate"], '
+    '"k": 5}\n\n'
+    '2. lookup — Browse codes by prefix (explore a code family):\n'
+    '   {"tool": "lookup", "prefix": "C61", "limit": 20}\n\n'
+    '3. get — Get full details for a specific code:\n'
+    '   {"tool": "get", "code": "C619"}\n\n'
+    "Use these tools to explore, verify, and refine before committing to a "
+    "final answer. You can call multiple tools in one response.\n\n"
+    "Output a JSON object with these fields:\n"
     '- "reasoning": Your detailed clinical reasoning\n'
+    '- "actions": List of tool calls to execute (see above). Empty when '
+    "done.\n"
     '- "diagnoses": Your reconciled list of 1-10 concise ICD-10-CM '
-    'diagnostic phrases\n'
-    '- "queries": Search terms to find ICD-10 codes for any new or changed '
-    'diagnoses (these will be embedded and matched against the code '
-    'database)\n'
-    '- "done": true if you are confident in your reconciled diagnoses, '
-    'false if you need another round of review\n'
+    "diagnostic phrases (include only when done=true)\n"
+    '- "done": true when confident in your final diagnoses, false to '
+    "continue exploring\n\n"
+    "ICD-10-CM naming conventions:\n"
+    '- Use "Malignant neoplasm of [site]" — not "cancer" or "carcinoma"\n'
+    '- Use "Unspecified" when the documentation does not specify the site\n'
+    '- Include clinical qualifiers where documented (e.g., "acute", '
+    '"in remission")\n\n'
+    "Do NOT include ICD-10 code numbers in your diagnoses — the search "
+    "will find them."
 )
 
 _MAX_DIAGNOSES = 10
 
 
-# -- Pydantic model for critic output --------------------------------------
+# -- Pydantic model for agent output ----------------------------------------
 
 
-class CriticOutput(BaseModel):
-    """Pydantic schema for validating debate-critic JSON output.
+class CriticAgentOutput(BaseModel):
+    """Schema for the agentic critic's JSON output.
 
-    The critic reconciles two models' diagnoses and produces its own
-    reasoning, reconciled diagnoses, search queries, and a done flag.
+    The critic either requests tool calls (``actions`` non-empty,
+    ``done=false``) or commits to a final answer (``done=true`` with
+    ``diagnoses``).
 
     Attributes:
         reasoning: The critic's clinical reasoning.
-        diagnoses: 1-10 reconciled diagnosis strings.
-        queries: Free-form search terms for ICD-10 vector search.
+        actions: Tool calls to execute. Each dict has a ``tool`` key
+            (``"search"``, ``"lookup"``, or ``"get"``) plus tool-specific
+            parameters.
+        diagnoses: 1-10 reconciled diagnosis strings (when ``done``).
         done: Whether the critic is confident (``True`` ends the loop).
     """
 
     reasoning: str = ""
-    diagnoses: list[str]
-    queries: list[str] = []
+    actions: list[dict] = []
+    diagnoses: list[str] = []
     done: bool = False
 
     @field_validator("diagnoses", mode="after")
@@ -107,13 +123,129 @@ class CriticOutput(BaseModel):
     def clean_diagnoses(cls, v: list[str]) -> list[str]:
         return clean_str_list(v)
 
-    @field_validator("queries", mode="after")
-    @classmethod
-    def clean_queries(cls, v: list[str]) -> list[str]:
-        return clean_str_list(v)
+
+# -- Read-only tools --------------------------------------------------------
 
 
-# -- Business logic ---------------------------------------------------------
+def _tool_search(diagnoses: list[str], k: int = 3) -> str:
+    """Execute a vector + FTS search and format results as a string.
+
+    Args:
+        diagnoses: Diagnosis descriptions to search for.
+        k: Max codes per diagnosis (capped at ``_MAX_K``).
+
+    Returns:
+        Formatted code list, or an error message.
+    """
+    k = min(k, _MAX_K)
+    try:
+        matches = safe_search(diagnoses, k)
+    except Exception as e:
+        return f"ERROR: {e}"
+    if not matches:
+        return "No codes found."
+    lines = [
+        f"  {m.code:<8} ({m.similarity:.2f}) {m.short_desc} — {m.long_desc}"
+        for m in matches
+    ]
+    return "\n".join(lines)
+
+
+def _tool_lookup(prefix: str, limit: int = 20) -> str:
+    """Browse ICD-10-CM codes by prefix.
+
+    Args:
+        prefix: Code prefix (e.g. ``"C61"``, ``"F11"``). Periods are stripped.
+        limit: Max rows (capped at ``_MAX_LOOKUP``).
+
+    Returns:
+        Formatted code list, or an error message.
+    """
+    prefix = prefix.replace(".", "").upper()
+    limit = min(limit, _MAX_LOOKUP)
+    try:
+        with get_pool().connection() as conn:
+            rows = conn.execute(
+                "SELECT code, short_desc, long_desc, is_billable "
+                "FROM icd10_codes WHERE starts_with(code, %s) "
+                "ORDER BY code LIMIT %s",
+                (prefix, limit),
+            ).fetchall()  # type: ignore
+    except Exception as e:
+        return f"ERROR: {e}"
+    if not rows:
+        return f"No codes starting with '{prefix}'."
+    lines = []
+    for r in rows:
+        tag = "[billable]" if r["is_billable"] else "(header)"
+        lines.append(
+            f"  {r['code']:<8} {tag:<12} {r['short_desc']} — {r['long_desc']}"
+        )
+    return "\n".join(lines)
+
+
+def _tool_get(code: str) -> str:
+    """Get full details for a single ICD-10-CM code.
+
+    Args:
+        code: Code string (with or without period).
+
+    Returns:
+        Formatted code details, or a not-found message.
+    """
+    code = code.replace(".", "").upper()
+    try:
+        with get_pool().connection() as conn:
+            row = conn.execute(
+                "SELECT code, short_desc, long_desc, is_billable "
+                "FROM icd10_codes WHERE code = %s",
+                (code,),
+            ).fetchone()  # type: ignore
+    except Exception as e:
+        return f"ERROR: {e}"
+    if not row:
+        return f"Code '{code}' not found."
+    tag = "[billable]" if row["is_billable"] else "(header)"
+    return (
+        f"  {row['code']} {tag} {row['short_desc']} — {row['long_desc']}"
+    )
+
+
+def _execute_action(action: dict) -> str:
+    """Dispatch a single tool call and return the formatted result.
+
+    Args:
+        action: Dict with a ``tool`` key and tool-specific parameters.
+
+    Returns:
+        Tool result as a string (or an error message).
+    """
+    tool = action.get("tool", "")
+
+    if tool == "search":
+        diagnoses = action.get("diagnoses", [])
+        k = action.get("k", 3)
+        if not diagnoses:
+            return "ERROR: 'diagnoses' is required for search."
+        return _tool_search(diagnoses, k)
+
+    if tool == "lookup":
+        prefix = action.get("prefix", "")
+        limit = action.get("limit", 20)
+        if not prefix:
+            return "ERROR: 'prefix' is required for lookup."
+        return _tool_lookup(prefix, limit)
+
+    if tool == "get":
+        code = action.get("code", "")
+        if not code:
+            return "ERROR: 'code' is required for get."
+        return _tool_get(code)
+
+    return f"ERROR: Unknown tool '{tool}'. Available: search, lookup, get."
+
+
+# -- Context building (unchanged from previous version) ---------------------
 
 
 def build_critic_context(
@@ -164,67 +296,6 @@ def build_critic_context(
     return "\n".join(lines)
 
 
-def diagnose_critic(
-    text: str,
-    a: ModelOutput,
-    b: ModelOutput,
-    previous_rounds: list[dict],
-    critic_model: str,
-    *,
-    temperature: float = 0.25,
-    max_tokens: int = 8192,
-) -> tuple[list[str], list[str], str, bool, str]:
-    """Run the debate-critic agent to reconcile two models' diagnoses.
-
-    The critic receives both models' diagnoses, ICD-10 codes, reasoning,
-    and any previous round history, then produces its own reconciled
-    diagnoses plus optional search queries.
-
-    Uses a generous token budget (8192) to allow the critic to reason
-    freely before producing structured JSON output.
-
-    Args:
-        text: Original clinical text.
-        a: :class:`ModelOutput` from model A.
-        b: :class:`ModelOutput` from model B.
-        previous_rounds: Prior critic rounds (list of dicts with keys
-            ``round``, ``reasoning``, ``diagnoses``, ``codes``).
-        critic_model: LiteLLM alias for the critic model.
-        temperature: Sampling temperature (default 0.25 — moderate
-            creativity for reconciliation).
-        max_tokens: Token budget (default 8192).
-
-    Returns:
-        A ``(diagnoses, queries, reasoning, done, thinking)`` tuple.
-        On parse failure, ``diagnoses`` is empty and ``done`` is ``False``.
-    """
-    user_msg = build_critic_context(text, a, b, previous_rounds)
-    messages = [
-        {"role": "system", "content": _CRITIC_SYSTEM},
-        {"role": "user", "content": user_msg},
-    ]
-
-    try:
-        raw, thinking = proxy.chat_completion(
-            critic_model, messages,
-            temperature=temperature, max_tokens=max_tokens,
-        )
-    except Exception as e:
-        print(f"[critic] model call failed: {e}")
-        return [], [], "", False, ""
-
-    data = _extract_json(raw)
-    if data is not None:
-        try:
-            result = CriticOutput(**data)
-            return result.diagnoses, result.queries, result.reasoning, result.done, thinking
-        except (ValidationError, TypeError):
-            pass
-
-    diagnoses = _parse_diagnoses(raw)
-    return diagnoses, [], "", False, thinking
-
-
 # -- Graph nodes & routing --------------------------------------------------
 
 
@@ -244,12 +315,10 @@ def should_critic(state: DiagnoseState) -> str:
     codes_a = state.get("codes_a", [])
     codes_b = state.get("codes_b", [])
 
-    # Different number of diagnoses -> disagreement.
     if len(dx_a) != len(dx_b):
         print(f"[critic] triggered: dx count {len(dx_a)} vs {len(dx_b)}")
         return "critic"
 
-    # Different top-1 code (or one has codes and the other doesn't).
     top_a = codes_a[0].code if codes_a else None
     top_b = codes_b[0].code if codes_b else None
     if top_a != top_b:
@@ -259,18 +328,22 @@ def should_critic(state: DiagnoseState) -> str:
     return "end"
 
 
-def critic_think(state: DiagnoseState) -> dict:
-    """Call the critic model to reconcile the two models' outputs.
+def critic_agent(state: DiagnoseState) -> dict:
+    """Run the agentic critic: iteratively query the code database and reconcile.
 
-    Passes both models' diagnoses, codes, reasoning, and any previous
-    round history to the critic.  The critic returns its own reconciled
-    diagnoses, search queries, reasoning, and a done flag.
+    The critic loops internally (up to ``_MAX_TOOL_CALLS`` iterations):
+    each iteration calls the LLM, which either requests tool calls (search,
+    lookup, get) or signals ``done`` with final diagnoses.  Tool results are
+    appended to the conversation so the critic can see them and refine.
+
+    After the loop, a final ``safe_search`` produces the official ICD-10
+    codes for the round (consistent with how Model A/B codes are produced).
     """
     rounds = state.get("critic_rounds", [])
     round_num = len(rounds)
 
     print(f"[critic] round {round_num} (model={CRITIC_MODEL}, "
-          f"temp={CRITIC_TEMP})")
+          f"temp={CRITIC_TEMP}, max_tool_calls={_MAX_TOOL_CALLS})")
 
     a = ModelOutput(
         model=state.get("model_a", ""),
@@ -284,44 +357,102 @@ def critic_think(state: DiagnoseState) -> dict:
         codes=state.get("codes_b", []),
         reasoning=state.get("reasoning_b", ""),
     )
-    diagnoses, queries, reasoning, done, thinking = diagnose_critic(
-        state["text"],
-        a, b,
-        previous_rounds=[r.model_dump() for r in rounds],
-        critic_model=CRITIC_MODEL,
-        temperature=CRITIC_TEMP,
-        max_tokens=CRITIC_MAX_TOKENS,
+    user_msg = build_critic_context(
+        state["text"], a, b,
+        [r.model_dump() for r in rounds],
     )
+
+    messages: list[dict] = [
+        {"role": "system", "content": _CRITIC_AGENT_SYSTEM},
+        {"role": "user", "content": user_msg},
+    ]
+
+    all_tool_calls: list[dict] = []
+    diagnoses: list[str] = []
+    reasoning = ""
+    thinking = ""
+    done = False
+
+    for iteration in range(_MAX_TOOL_CALLS):
+        try:
+            raw, think = proxy.chat_completion(
+                CRITIC_MODEL, messages,
+                temperature=CRITIC_TEMP,
+                max_tokens=CRITIC_MAX_TOKENS,
+            )
+            thinking = think or thinking
+        except Exception as e:
+            print(f"[critic] model call failed at iteration {iteration}: {e}")
+            break
+
+        data = _extract_json(raw)
+        if data is None:
+            print(f"[critic] iteration {iteration}: JSON parse failed, "
+                  "falling back to regex")
+            diagnoses = _parse_diagnoses(raw)
+            done = True
+            break
+
+        try:
+            result = CriticAgentOutput(**data)
+        except (ValidationError, TypeError):
+            print(f"[critic] iteration {iteration}: validation failed, "
+                  "falling back to regex")
+            diagnoses = _parse_diagnoses(raw)
+            done = True
+            break
+
+        reasoning = result.reasoning or reasoning
+        done = result.done
+
+        if done or not result.actions:
+            diagnoses = result.diagnoses
+            print(f"[critic] iteration {iteration}: done={done}, "
+                  f"{len(diagnoses)} diagnoses")
+            break
+
+        messages.append({"role": "assistant", "content": raw})
+
+        for action in result.actions:
+            tool_name = action.get("tool", "unknown")
+            tool_result = _execute_action(action)
+            all_tool_calls.append({
+                "tool": tool_name,
+                "params": {k: v for k, v in action.items() if k != "tool"},
+                "result_preview": tool_result[:200],
+            })
+            messages.append({
+                "role": "user",
+                "content": f"Tool result ({tool_name}):\n{tool_result}",
+            })
+            print(f"[critic]   tool: {tool_name} → {len(tool_result)} chars")
+    else:
+        print(f"[critic] max tool calls ({_MAX_TOOL_CALLS}) reached; "
+              "exiting agent loop")
+
+    if not diagnoses and data:
+        try:
+            result = CriticAgentOutput(**data)
+            diagnoses = result.diagnoses
+        except (ValidationError, TypeError):
+            pass
+
+    k = state.get("k", 3)
+    codes: list[ICD10Match] = []
+    if diagnoses:
+        codes = safe_search(diagnoses, k)
 
     new_round = CriticRound(
         round=round_num,
         reasoning=reasoning,
         diagnoses=diagnoses,
-        queries=queries,
-        codes=[],
+        queries=[],
+        codes=codes,
         done=done,
         thinking=thinking,
+        tool_calls=all_tool_calls,
     )
     return {"critic_rounds": rounds + [new_round]}
-
-
-def critic_search(state: DiagnoseState) -> dict:
-    """Search ICD-10 for the latest critic round's diagnoses + queries."""
-    rounds = state.get("critic_rounds", [])
-    if not rounds:
-        return {}
-
-    latest = rounds[-1]
-    k = state.get("k", 3)
-
-    # Search using diagnoses + critic-provided queries for broader coverage.
-    search_terms = list(latest.diagnoses) + list(latest.queries)
-    codes = safe_search(search_terms, k)
-
-    # Update the latest round's codes in place.
-    updated_round = latest.model_copy(update={"codes": codes})
-    updated_rounds = list(rounds[:-1]) + [updated_round]
-    return {"critic_rounds": updated_rounds}
 
 
 def should_continue_critic(state: DiagnoseState) -> str:
