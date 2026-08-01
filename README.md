@@ -7,7 +7,7 @@ ICD-10-CM medical coding prototype. The default stack runs as 3 containers
 | Service    | Image                                 | Role                                                                  |
 | ---------- | ------------------------------------- | -------------------------------------------------------------------- |
 | `postgres` | `pgvector/pgvector:pg16`              | Stores `icd10_codes`; `medicoder` role (rw); LiteLLM audit DB |
-| `medicoder`| built from `Dockerfile`               | App + idempotent ICD-10 loader + `/test`, `/code`, `/diagnose` endpoints  |
+| `medicoder`| built from `Dockerfile`               | App + idempotent ICD-10 loader + `/test`, `/code`, `/diagnose`, `/search` endpoints  |
 | `litellm`  | `ghcr.io/berriai/litellm:main-stable` | Local proxy: routes the model alias to your upstream LLM + audits every call/response to Postgres |
 
 `medicoder` always points its OpenAI-compatible client at the local LiteLLM
@@ -44,10 +44,10 @@ and embedding aliases are hardcoded to the in-container Ollama
 | Alias | Model | Notes |
 | ----- | ----- | ----- |
 | `A` | `${LLM_UPSTREAM_MODEL}` | Env-driven; any OpenAI-compatible endpoint |
-| `ii-medical-q8` | `II-Medical-8B-1706-GGUF:Q8_0` | Medical diagnosis generation |
-| `deepseek-r1-medical-cot` | `DeepSeek-R1-Medical-COT:Q4_K_M` | Medical (thinking model) |
-| `qwen35-medical` | `qwen35-9b-medical:Q4_K_M` | Medical |
-| `embed` | `zembed-1` | 2560-dim medical embeddings for ICD-10 vector search |
+| `medgemma-27b-q4_k_s` | `unsloth/medgemma-27b-text-it-GGUF:Q4_K_S` | Medical diagnosis generation (default Model A + critic) |
+| `deepseek-r1-medical-cot` | `mradermacher/DeepSeek-R1-Medical-COT-GGUF:Q8_0` | Medical (thinking model, default Model B) |
+| `ii-medical-q8` | `Intelligent-Internet/II-Medical-8B-1706-GGUF:Q8_0` | Medical (available, not default) |
+| `embed` | `Abiray/zembed-1-Q4_K_M-GGUF:Q4_K_M` | 2560-dim medical embeddings for ICD-10 vector search |
 
 Alias `A` is configured via `.env`:
 
@@ -126,19 +126,14 @@ list the Ollama-registry tags you want available:
 
 ```toml
 [[model]]
-name = "hf.co/rwibawa/DeepSeek-R1-Medical-COT:Q4_K_M"
+name = "hf.co/mradermacher/DeepSeek-R1-Medical-COT-GGUF:Q8_0"
 
 [[model]]
-name = "hf.co/Intelligent-Internet/II-Medical-8B-1706-GGUF:Q8_0"
+name = "hf.co/unsloth/medgemma-27b-text-it-GGUF:Q4_K_S"
 
-[[model]]
-name = "hf.co/qaootkcx/qwen35-9b-medical:Q4_K_M"
-
+# Embedding model for ICD-10 vector similarity search (2560-dim, pgvector).
 [[model]]
 name = "hf.co/Abiray/zembed-1-Q4_K_M-GGUF:Q4_K_M"
-
-[[model]]
-name = "qwen2.5:7b"
 ```
 
 Each entry is a registry tag (also the local Ollama name). Re-runs are
@@ -155,14 +150,14 @@ docker compose -f docker-compose.yml -f docker/docker-compose.gpu.yml \
 LiteLLM has **no host port** (in-network only), so the models can't be reached
 directly from the host. The app exposes a temporary testing endpoint that calls
 LiteLLM internally. `model` is a LiteLLM alias from `docker/litellm/config.yaml`
-(e.g. `ii-medical-q8`, `deepseek-r1-medical-cot`, `qwen35-medical`, `A`):
+(e.g. `medgemma-27b-q4_k_s`, `deepseek-r1-medical-cot`, `ii-medical-q8`, `A`):
 
 ```bash
 # default medical prompt
-curl -X POST http://localhost:8000/test/qwen35-medical
+curl -X POST http://localhost:8000/test/medgemma-27b-q4_k_s
 
 # custom prompt
-curl -X POST http://localhost:8000/test/ii-medical-q8 \
+curl -X POST http://localhost:8000/test/deepseek-r1-medical-cot \
   -H 'Content-Type: application/json' \
   -d '{"prompt":"What is the ICD-10-CM code for essential hypertension?"}'
 ```
@@ -179,7 +174,7 @@ always run in fixed order, which is more reliable than asking a generalist
 model to chain tool calls.
 
 1. **Diagnose** — the clinical text is forwarded to a medical model (default
-   `ii-medical-q8`) via a plain chat completion (no tools required). The model
+   `medgemma-27b-q4_k_s`) via a plain chat completion (no tools required). The model
    returns 1–10 independent diagnoses (one per line). Thinking blocks
    (`<think>...</think>` and orphaned `</think>` tags) are stripped
    automatically; `\boxed{...}` wrappers and leading numbers/bullets are
@@ -202,7 +197,7 @@ curl -X POST http://localhost:8000/code \
 
 Optional fields override the defaults:
 
-- `medical_model` — diagnosis model (default `ii-medical-q8`)
+- `medical_model` — diagnosis model (default `medgemma-27b-q4_k_s`)
 - `k` — ICD-10 codes per diagnosis (default `3`)
 
 ```bash
@@ -230,7 +225,7 @@ Uses a LangGraph `StateGraph`:
 
 ```
 START
-  ├──→ diagnose_a (ii-medical-q8)           ──┐
+  ├──→ diagnose_a (medgemma-27b-q4_k_s)     ──┐
   ├──→ diagnose_b (deepseek-r1-medical-cot) ──┤  parallel
   │                                          ↓
   │                                     fan-in
@@ -255,16 +250,16 @@ END
 The graph topology guarantees both models are called before the search step
 runs. Both models run concurrently, so wall-clock time is roughly
 max(model_a, model_b) + search. If the critic triggers, add ~60–120s per
-round (the critic reuses `ii-medical-q8`, already loaded in VRAM).
+round (the critic reuses `medgemma-27b-q4_k_s`, already loaded in VRAM).
 
 ### Debate-critic loop
 
-When the two models disagree, the critic agent (ii-medical-q8, temp=0.25,
-8192 tokens) receives both models' diagnoses, ICD-10 codes, reasoning, and
-any previous round history. It produces its own reconciled diagnoses plus
-optional search queries that are embedded and matched against the ICD-10
-code database. The critic signals `done: true` when confident; otherwise the
-loop continues up to `MAX_CRITIC_ROUNDS`.
+When the two models disagree, the critic agent (`CRITIC_MODEL`, default
+`medgemma-27b-q4_k_s`, temp=0.25, 8192 tokens) receives both models'
+diagnoses, ICD-10 codes, reasoning, and any previous round history. It produces
+its own reconciled diagnoses plus optional search queries that are embedded and
+matched against the ICD-10 code database. The critic signals `done: true` when
+confident; otherwise the loop continues up to `MAX_CRITIC_ROUNDS`.
 
 The critic prompt is designed to give the model freedom to reason before
 producing structured output — analysis instructions come first, the JSON
@@ -274,6 +269,9 @@ Configure via environment variable (`.env`):
 
 | Variable | Default | Description |
 |---|---|---|
+| `MODEL_A` | `medgemma-27b-q4_k_s` | First medical model (LiteLLM alias). |
+| `MODEL_B` | `deepseek-r1-medical-cot` | Second medical model (LiteLLM alias). |
+| `CRITIC_MODEL` | `medgemma-27b-q4_k_s` | Critic model for the reconciliation loop. |
 | `MAX_CRITIC_ROUNDS` | `2` | Max reconciliation rounds (0 = disabled). |
 
 Disable per-request with `"enable_critic": false`:
@@ -302,11 +300,26 @@ curl -X POST http://localhost:8000/diagnose \
 
 Returns `{"results", "critic_triggered", "critic_rounds", "elapsed_s"}`:
 
-- `results` — list of two `{model, diagnoses, codes, reasoning}` entries
+- `results` — list of two `{model, diagnoses, codes, reasoning, thinking}` entries
   (one per medical model, in fixed order).
 - `critic_triggered` — `true` if the debate-critic loop ran.
 - `critic_rounds` — full trace of each reconciliation round (empty if not
-  triggered). Each round has `{round, reasoning, diagnoses, queries, codes, done}`.
+  triggered). Each round has `{round, reasoning, diagnoses, queries, codes, done, thinking}`.
+
+## Direct ICD-10 search (POST /search)
+
+Runs the hybrid vector + FTS search directly — no medical model invoked. Accepts
+pre-written diagnosis descriptions and returns matching billable ICD-10 codes.
+Useful for testing search quality in isolation from LLM diagnosis quality.
+
+```bash
+curl -X POST http://localhost:8000/search \
+  -H 'Content-Type: application/json' \
+  -d '{"diagnoses":["Malignant neoplasm of cervix uteri"],"k":5}'
+```
+
+Returns a list of `{code, short_desc, long_desc, similarity}` matches, best
+match first.
 
 ## Data loading
 
@@ -338,6 +351,63 @@ docker compose exec medicoder python -m medicoder.db.embed_icd10
 All 98,186 codes are embedded (74,719 billable + 23,467 non-billable). The
 non-billable codes are pre-embedded so they're search-ready if CMS reclassifies
 them. The `/code` search query filters to `is_billable` at query time.
+
+**"Unspecified" stripping.** The word *unspecified* is stripped from the
+embedding input text before embedding. The embedding model penalises codes
+containing the term, giving them artificially low similarity even to queries
+using their own diagnostic terms (e.g. C539 *Malignant neoplasm of cervix
+uteri, unspecified* scores ~0.48 against the query *Malignant neoplasm of
+cervix uteri*). Stripping the qualifier from the embedding input fixes this
+(similarity rises to ~0.99) without changing the stored `long_desc`. This
+affects ~29k codes (23k billable).
+
+### Full-text search index
+
+`docker/postgres/03-fts.sql` adds a generated `search_tsv` tsvector column
+(combining `short_desc` + `long_desc`) and a GIN index over billable codes.
+This enables a lexical search alongside the vector search — FTS candidates are
+fetched and merged with vector candidates, with an adjustable score boost
+(`_FTS_BOOST` in `medical.py`, default `0.0` = pure vector ranking). The FTS
+infrastructure is preserved for future tuning.
+
+## Evaluation & analysis tools
+
+Three host-side scripts measure pipeline accuracy and diagnose failures. All
+run outside the container and call the app's HTTP endpoints.
+
+### Evaluator (`evaluate.py`)
+
+Runs all 54 test cases from `data/icd10_cm_cases.json` through the
+`/diagnose` endpoint and reports per-model and aggregate metrics: top-1
+through top-3 accuracy, recall, precision@GT, F1, and category-level
+(3-char prefix) recall/precision/F1 to distinguish "right disease, wrong
+specificity" from total misses.
+
+```bash
+python evaluate.py                      # all 54 cases
+python evaluate.py 5                    # first 5 cases (quick test)
+python evaluate.py --save eval_output.json   # save detailed results
+```
+
+### Search replay (`replay_search.py`)
+
+Replays stored diagnoses from every `eval_output*.json` file through the
+current `/search` endpoint. Isolates **search-only** impact — prompt and model
+changes are not tested because old diagnoses are reused. Deduplicates by
+diagnosis tuple and caches results for speed.
+
+```bash
+python replay_search.py
+```
+
+### Case difficulty analysis (`analyze_cases.py`)
+
+Aggregates per-case metrics across all `eval_output*.json` files and ranks
+cases by identification difficulty (easy → failed), using status tiers.
+
+```bash
+python analyze_cases.py
+```
 
 ## Roles
 
@@ -414,20 +484,25 @@ docker/postgres/00-schema.sql    extension + icd10_codes table + indexes
 docker/postgres/01-roles.sh      medicoder (rw) role
 docker/postgres/02-litellm.sh    litellm role + audit database
 docker/postgres/02-embedding.sql pgvector embedding column + HNSW index (2560-dim)
+docker/postgres/03-fts.sql       generated tsvector column + GIN index for hybrid search
 docker/litellm/config.yaml       LiteLLM alias -> upstream routing + DB logging
 docker/litellm/log_callback.py   custom callback -> llm_call_log (prompts/thinking/output/tools)
-medicoder/proxy.py               shared LiteLLM client: chat_completion(), embed(), strip_thinking()
-medicoder/medical.py             shared pipeline functions: diagnose(), diagnose_critic(), search_icd10()
-medicoder/schemas.py             Pydantic models (ICD10Code, TestRequest/Response, CodeRequest/Response, DiagnoseRequest/Response, CriticRound, ToolResult)
+medicoder/proxy.py               shared LiteLLM client: chat_completion() -> (output, thinking), embed(), extract_thinking()
+medicoder/medical.py             shared pipeline: diagnose(), search_icd10() (hybrid vector+FTS), ModelOutput, _parse_diagnosis_output()
+medicoder/critic.py              debate-critic loop: diagnose_critic(), graph nodes (should_critic, critic_think, critic_search)
+medicoder/schemas.py             Pydantic models (ICD10Code, ICD10Match, SearchRequest, DiagnoseState, DiagnosisResult, CriticRound, etc.)
 medicoder/db/connect.py          shared CLI Postgres connection (retried)
 medicoder/db/load_icd10.py       fixed-width -> COPY loader
-medicoder/db/embed_icd10.py      idempotent bulk embedder (zembed-1 via LiteLLM)
+medicoder/db/embed_icd10.py      idempotent bulk embedder (zembed-1 via LiteLLM, strips "unspecified" from embedding text)
 medicoder/db/pool.py             psycopg connection pool (lifespan-managed)
-medicoder/routes/icd10.py        /codes endpoints
+medicoder/routes/icd10.py        GET /codes, POST /search — ICD-10 lookup + direct vector search
 medicoder/routes/llm.py          POST /test/{model} — call a LiteLLM alias
 medicoder/routes/code.py         POST /code — deterministic pipeline (diagnose + search_icd10)
-medicoder/routes/diagnose.py     POST /diagnose — LangGraph StateGraph (2 models + search + debate-critic loop)
+medicoder/routes/diagnose.py     POST /diagnose — LangGraph StateGraph wiring (2 models + search + debate-critic loop)
 main.py                          FastAPI app + lifespan + router wiring
+evaluate.py                      full-pipeline evaluator (top-1/3, recall, precision, F1, category-level metrics)
+replay_search.py                 search-only replay: tests search quality in isolation from LLM quality
+analyze_cases.py                 case difficulty analysis across all eval runs
 models.toml                      registry models for the ollama-init sidecar
 .vscode/{launch,tasks,extensions}.json  VSCode container debugging
 .env.example                     all configuration
