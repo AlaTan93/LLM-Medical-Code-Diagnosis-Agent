@@ -1,16 +1,16 @@
 [project]
 name = "medicoder-technical"
 version = "0.1.0"
-description = "Add your description here"
+description = "ICD-10-CM medical coding prototype with dual-model LLM diagnosis, hybrid vector search, and agentic debate-critic reconciliation."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "fastapi>=0.140.0",
-    "langgraph>=0.2.0",
-    "pandas>=3.0.5",
-    "psycopg[binary,pool]>=3.2",
-    "pydantic>=2.13.4",
-    "uvicorn[standard]>=0.51.0",
+    "fastapi==0.140.0",
+    "langgraph==1.2.9",
+    "pandas==3.0.5",
+    "psycopg[binary,pool]==3.3.4",
+    "pydantic==2.13.4",
+    "uvicorn[standard]==0.51.0",
 ]
 
 # Debug-only tools. Excluded from the production image (Dockerfile uses
@@ -18,5 +18,23 @@ dependencies = [
 # override (docker/docker-compose.debug.yml).
 [dependency-groups]
 dev = [
-    "debugpy>=1.8",
+    "debugpy==1.8.21",
+    "pytest==9.1.1",
+    "ruff==0.16.1",
 ]
+
+[tool.ruff]
+line-length = 92
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["E501"]  # line length handled by formatter
+
+[tool.ruff.lint.isort]
+known-first-party = ["medicoder"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]

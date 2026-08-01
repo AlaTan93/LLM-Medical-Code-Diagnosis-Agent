@@ -33,7 +33,7 @@
 
 services:
   ollama-amd:
-    image: ollama/ollama:rocm
+    image: ollama/ollama:0.32.4-rocm
     profiles: ["gpu-amd"]
     devices:
       - /dev/kfd
@@ -52,7 +52,7 @@ services:
     restart: unless-stopped
 
   ollama-nvidia:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.32.4
     profiles: ["gpu-nvidia"]
     deploy:
       resources:

@@ -563,7 +563,7 @@ def search_icd10(queries: list[str], k: int = 3) -> list[ICD10Match]:
 
     with get_pool().connection() as conn:
         conn.execute("SET LOCAL hnsw.ef_search = 200")
-        for query_text, vec in zip(queries, vectors):
+        for query_text, vec in zip(queries, vectors, strict=False):
             qv = json.dumps(vec)
             vec_rows = _fetch_vector(conn, qv, cand_k)
             fts_rows, fts_is_and = _fetch_fts(conn, query_text, qv, cand_k)

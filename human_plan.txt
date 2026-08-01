@@ -62,4 +62,19 @@ One vector similarity search involved the use of bge-m3, a 1024-dim embedding mo
 But vector similarity search using this model was failing to rank Erysipelas and Erysipeloid
 similarly despite having the same prefix. So, was thinking of switching to zembed-1.
 
-The text "unspecified" was making text rank a lot worse during vector similarity search
+The text "unspecified" was making text rank a lot worse during vector similarity search.
+So I removed the word when I was embedding the entire codes.
+
+-----
+
+Future work:
+I think the medical knowledge of the models, even when augmented with the code database,
+is insufficient to create the project.
+
+As part of the post-mortem search, I found this file by the USA's CDC:
+https://ftp.cdc.gov/pub/Health_Statistics/NCHS/Publications/ICD10CM/2027/ICD-10-CM-October-1-2026-FY27-Guidelines.pdf
+
+While it is not comprehensive on all specific codes, and is a huge document, 
+the chapter-specific coding guidelines may be useful as a source of information for 
+RAG-based prompting to identify the correct codes.
+

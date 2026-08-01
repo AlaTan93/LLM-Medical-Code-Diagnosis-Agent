@@ -22,3 +22,4 @@ prev_session.txt
 .env
 .vscode
 eval_*.json
+prev_session.txt

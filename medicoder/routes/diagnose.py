@@ -42,11 +42,10 @@ from medicoder.critic import (
 )
 from medicoder.medical import diagnose, safe_search
 from medicoder.schemas import (
-    DiagnosisResult,
     DiagnoseRequest,
     DiagnoseState,
+    DiagnosisResult,
     DualDiagnoseResponse,
-    ICD10Match,
 )
 
 router = APIRouter()

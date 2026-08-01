@@ -52,12 +52,12 @@ def test_model(model: str, body: TestRequest | None = None) -> TestResponse:
         raise HTTPException(
             status_code=status,
             detail=f"model '{model}' not available via LiteLLM ({e.code}): {detail}",
-        )
+        ) from None
     except urllib.error.URLError as e:
         reason = str(e.reason)
         if "timed out" in reason.lower():
-            raise HTTPException(status_code=504, detail=f"model '{model}' timed out")
-        raise HTTPException(status_code=502, detail=f"LLM proxy unreachable: {reason}")
+            raise HTTPException(status_code=504, detail=f"model '{model}' timed out") from None
+        raise HTTPException(status_code=502, detail=f"LLM proxy unreachable: {reason}") from None
     elapsed = time.time() - started
     return TestResponse(
         model=model, prompt=prompt, response=content, elapsed_s=round(elapsed, 2)

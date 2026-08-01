@@ -19,14 +19,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 import urllib.request
+from datetime import UTC, datetime
+from pathlib import Path
 
 BASE_URL = "http://localhost:8000"
 CASES_PATH = "data/icd10_cm_cases.json"
 
-MODEL_A = "medgemma-27b-q4_k_s"
-MODEL_B = "deepseek-r1-medical-cot"
+MODEL_A = "deepseek-r1-medical-cot"
+MODEL_B = "medgemma-27b-q4_k_s"
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +132,73 @@ def call_diagnose(text: str, timeout: float = 600) -> dict:
         return json.load(resp)
 
 
+def _query_token_usage(since_ts: str) -> dict | None:
+    """Query the LiteLLM audit log for token usage since a timestamp.
+
+    Connects to the ``litellm`` database on ``localhost:5432`` and aggregates
+    ``prompt_tokens``, ``completion_tokens``, and ``total_tokens`` grouped by
+    model alias.  The password is read from the ``LITELLM_DB_PASSWORD``
+    environment variable, falling back to ``.env``.
+
+    Returns ``None`` if psycopg is unavailable, the DB is unreachable, or the
+    password is not found — allowing the evaluator to run without token
+    tracking in environments where the audit DB is not accessible.
+    """
+    try:
+        import psycopg
+    except ImportError:
+        return None
+
+    password = os.environ.get("LITELLM_DB_PASSWORD", "")
+    if not password:
+        env_path = Path(".env")
+        if env_path.exists():
+            for line in env_path.read_text().splitlines():
+                if line.startswith("LITELLM_DB_PASSWORD="):
+                    password = line.split("=", 1)[1].strip()
+                    break
+    if not password:
+        return None
+
+    try:
+        conn = psycopg.connect(
+            f"host=localhost port=5432 dbname=litellm "
+            f"user=litellm password={password}"
+        )
+        rows = conn.execute(
+            "SELECT model, "
+            "  COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens, "
+            "  COALESCE(SUM(completion_tokens), 0) AS completion_tokens, "
+            "  COALESCE(SUM(total_tokens), 0) AS total_tokens, "
+            "  COUNT(*) AS calls "
+            "FROM llm_call_log WHERE ts >= %s "
+            "GROUP BY model ORDER BY total_tokens DESC",
+            (since_ts,),
+        ).fetchall()
+        conn.close()
+    except Exception:
+        return None
+
+    result: dict[str, dict] = {}
+    for r in rows:
+        result[r["model"]] = {
+            "prompt_tokens": r["prompt_tokens"],
+            "completion_tokens": r["completion_tokens"],
+            "total_tokens": r["total_tokens"],
+            "calls": r["calls"],
+        }
+
+    if result:
+        result["_combined"] = {
+            "prompt_tokens": sum(v["prompt_tokens"] for v in result.values()),
+            "completion_tokens": sum(v["completion_tokens"] for v in result.values()),
+            "total_tokens": sum(v["total_tokens"] for v in result.values()),
+            "calls": sum(v["calls"] for v in result.values()),
+        }
+
+    return result or None
+
+
 # ---------------------------------------------------------------------------
 # Per-case console output
 # ---------------------------------------------------------------------------
@@ -171,11 +241,15 @@ def _evaluate_case(case: dict, index: int, total: int) -> dict | None:
     gt = {normalize(c) for c in gt_raw}
     gt_cnt = len(gt_raw)
 
+    case_start_ts = datetime.now(UTC).isoformat()
+
     try:
         result = call_diagnose(case["medical_note"])
     except Exception as e:
         print(f"[{index + 1:2d}/{total}] ERROR: {e}")
         return None
+
+    case_tokens = _query_token_usage(case_start_ts)
 
     elapsed = result.get("elapsed_s", 0)
     ra, rb = result["results"]
@@ -237,6 +311,7 @@ def _evaluate_case(case: dict, index: int, total: int) -> dict | None:
         "case": index + 1,
         "ground_truth": gt_raw,
         "elapsed_s": elapsed,
+        "token_usage": case_tokens,
         "model_a": {
             "diagnoses": dx_a,
             "dx_count": len(dx_a),
@@ -306,9 +381,9 @@ def _compute_summary(details: list[dict]) -> dict:
     avg_gt = sum(gt_c) / total
 
     def _cnt_cmp(dx: list[int]) -> tuple[int, int, int]:
-        match = sum(1 for d, g in zip(dx, gt_c) if d == g)
-        over = sum(1 for d, g in zip(dx, gt_c) if d > g)
-        under = sum(1 for d, g in zip(dx, gt_c) if d < g)
+        match = sum(1 for d, g in zip(dx, gt_c, strict=False) if d == g)
+        over = sum(1 for d, g in zip(dx, gt_c, strict=False) if d > g)
+        under = sum(1 for d, g in zip(dx, gt_c, strict=False) if d < g)
         return match, over, under
 
     match_a, over_a, under_a = _cnt_cmp(dx_a)
@@ -367,7 +442,11 @@ def _compute_summary(details: list[dict]) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _print_summary(m: dict) -> None:
+def _print_summary(
+    m: dict,
+    token_usage: dict | None = None,
+    wall_time_s: float | None = None,
+) -> None:
     """Print a side-by-side summary table to stdout."""
     t = m["total"]
     name_a = MODEL_A
@@ -401,12 +480,12 @@ def _print_summary(m: dict) -> None:
     _row2("Precision@GT", _val(m["avg_prec_a"]), _val(m["avg_prec_b"]))
     _row2("F1", _val(m["f1_a"]), _val(m["f1_b"]))
 
-    print(f"  -- Category level (3-char prefix) --")
+    print("  -- Category level (3-char prefix) --")
     _row2("Cat Recall", _val(m["avg_cat_rec_a"]), _val(m["avg_cat_rec_b"]))
     _row2("Cat Precision", _val(m["avg_cat_prec_a"]), _val(m["avg_cat_prec_b"]))
     _row2("Cat F1", _val(m["cat_f1_a"]), _val(m["cat_f1_b"]))
 
-    print(f"  -- Diagnosis count --")
+    print("  -- Diagnosis count --")
     _row2("Avg diagnoses", f"{m['avg_dx_a']:.1f}", f"{m['avg_dx_b']:.1f}")
     _row2("Match", _pct(m["match_a"], t), _pct(m["match_b"], t))
     _row2("Over-diagnose", _pct(m["over_a"], t), _pct(m["over_b"], t))
@@ -436,6 +515,21 @@ def _print_summary(m: dict) -> None:
         _row1("F1", _val(m["f1_c"]))
         _row1("Cat Recall", _val(m["avg_cat_rec_c"]))
         _row1("Cat F1", _val(m["cat_f1_c"]))
+
+    # -- Token usage --------------------------------------------------------
+    if token_usage:
+        print()
+        print("  -- Token usage --")
+        for model, t in token_usage.items():
+            label = "Combined" if model == "_combined" else model
+            print(
+                f"  {label:<28s}  "
+                f"{t['prompt_tokens']:>8,} + {t['completion_tokens']:>8,} "
+                f"= {t['total_tokens']:>8,}   ({t['calls']} calls)"
+            )
+
+    if wall_time_s is not None:
+        print(f"\n  Total wall time: {wall_time_s:.1f}s")
 
     print("=" * W)
 
@@ -509,19 +603,24 @@ def _build_metrics_json(m: dict) -> dict:
     return metrics
 
 
-def _save_json(path: str, m: dict, details: list[dict]) -> None:
+def _save_json(
+    path: str, m: dict, details: list[dict],
+    wall_time_s: float | None = None,
+    token_usage: dict | None = None,
+) -> None:
     """Write evaluation results (metrics + per-case details) to a JSON file."""
+    output: dict = {
+        "cases_evaluated": m["total"],
+        "models": {"a": MODEL_A, "b": MODEL_B},
+        "metrics": _build_metrics_json(m),
+        "details": details,
+    }
+    if wall_time_s is not None:
+        output["total_wall_time_s"] = round(wall_time_s, 1)
+    if token_usage:
+        output["token_usage"] = token_usage
     with open(path, "w") as f:
-        json.dump(
-            {
-                "cases_evaluated": m["total"],
-                "models": {"a": MODEL_A, "b": MODEL_B},
-                "metrics": _build_metrics_json(m),
-                "details": details,
-            },
-            f,
-            indent=2,
-        )
+        json.dump(output, f, indent=2)
     print(f"\nDetailed results saved to {path}")
 
 
@@ -537,6 +636,9 @@ def evaluate(limit: int | None, save_path: str | None) -> None:
         limit: Evaluate only the first *limit* cases (``None`` = all).
         save_path: If set, save detailed JSON results to this path.
     """
+    started = time.time()
+    eval_start_ts = datetime.now(UTC).isoformat()
+
     cases = load_cases()
     if limit is not None:
         cases = cases[:limit]
@@ -553,10 +655,14 @@ def evaluate(limit: int | None, save_path: str | None) -> None:
         return
 
     metrics = _compute_summary(details)
-    _print_summary(metrics)
+
+    wall_time = time.time() - started
+    token_usage = _query_token_usage(eval_start_ts)
+
+    _print_summary(metrics, token_usage=token_usage, wall_time_s=wall_time)
 
     if save_path:
-        _save_json(save_path, metrics, details)
+        _save_json(save_path, metrics, details, wall_time, token_usage)
 
 
 def main() -> int:
@@ -579,9 +685,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    started = time.time()
     evaluate(args.limit, args.save)
-    print(f"\nTotal wall time: {time.time() - started:.1f}s")
     return 0
 
 

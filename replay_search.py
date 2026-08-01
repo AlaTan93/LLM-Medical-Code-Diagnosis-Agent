@@ -18,7 +18,6 @@ from __future__ import annotations
 import glob
 import json
 import urllib.request
-from collections import defaultdict
 from dataclasses import dataclass, field
 
 BASE_URL = "http://localhost:8000"

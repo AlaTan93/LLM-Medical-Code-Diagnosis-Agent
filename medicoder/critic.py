@@ -31,7 +31,6 @@ Graph wiring lives in ``routes/diagnose.py``::
 
 from __future__ import annotations
 
-import json
 import os
 
 from pydantic import BaseModel, ValidationError, field_validator
@@ -40,10 +39,10 @@ from medicoder import proxy
 from medicoder.db.pool import get_pool
 from medicoder.medical import (
     ModelOutput,
-    clean_str_list,
-    safe_search,
     _extract_json,
     _parse_diagnoses,
+    clean_str_list,
+    safe_search,
 )
 from medicoder.schemas import CriticRound, DiagnoseState, ICD10Match
 
@@ -90,9 +89,6 @@ _CRITIC_AGENT_SYSTEM = (
     "Do NOT include ICD-10 code numbers in your diagnoses — the search "
     "will find them."
 )
-
-_MAX_DIAGNOSES = 10
-
 
 # -- Pydantic model for agent output ----------------------------------------
 

@@ -86,7 +86,7 @@ def main() -> int:
             except Exception as e:
                 print(f"[embed_icd10] embedding failed: {e}", file=sys.stderr)
                 return 1
-            for (order_number, _), vec in zip(rows, vectors):
+            for (order_number, _), vec in zip(rows, vectors, strict=False):
                 cur.execute(UPDATE_SQL, (json.dumps(vec), order_number))
             conn.commit()
             done += len(rows)
