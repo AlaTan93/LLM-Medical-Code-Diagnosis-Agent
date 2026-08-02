@@ -5,22 +5,14 @@
   // debugpy and STAYS attached (streaming logs) until you stop it. F5 attaches
   // separately (see launch.json) and detach/reattach does NOT restart the stack.
   //
-  // Pick the mode by running the matching start task, then F5:
-  //   cloud   -> LiteLLM routes to LLM_UPSTREAM_* in .env (cloud / host Ollama)
-  //   amd     -> also starts ollama-amd (ROCm) and repoints LiteLLM at it
-  //   nvidia  -> also starts ollama-nvidia (CUDA) and repoints LiteLLM at it
+  // Pick the mode by running the matching start task, then F5. Both modes
+  // start an in-container Ollama (no cloud/remote LLM option exists):
+  //   amd     -> starts ollama-amd (ROCm) and points LiteLLM at it
+  //   nvidia  -> starts ollama-nvidia (CUDA) and points LiteLLM at it
   //
   // To switch modes: run the old mode's debug-down-* first.
   "version": "2.0.0",
   "tasks": [
-    {
-      "label": "debug-up-cloud",
-      "detail": "Start the debug stack (cloud/remote LLM via .env)",
-      "type": "shell",
-      "isBackground": true,
-      "command": "docker compose --env-file .env -f docker-compose.yml -f docker/docker-compose.debug.yml up",
-      "presentation": { "reveal": "always", "panel": "dedicated" }
-    },
     {
       "label": "debug-up-amd",
       "detail": "Start the debug stack + AMD/ROCm Ollama (--profile gpu-amd)",
@@ -36,12 +28,6 @@
       "isBackground": true,
       "command": "docker compose --env-file .env -f docker-compose.yml -f docker/docker-compose.debug.yml -f docker/docker-compose.gpu.yml --profile gpu-nvidia up",
       "presentation": { "reveal": "always", "panel": "dedicated" }
-    },
-    {
-      "label": "debug-down-cloud",
-      "detail": "Stop and remove the debug stack (cloud/remote mode)",
-      "type": "shell",
-      "command": "docker compose --env-file .env -f docker-compose.yml -f docker/docker-compose.debug.yml down"
     },
     {
       "label": "debug-down-amd",

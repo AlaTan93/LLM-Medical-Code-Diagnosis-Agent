@@ -270,21 +270,14 @@ ollama-amd:
 LiteLLM's config points at `http://ollama:11434` regardless of which vendor
 is active. You must down one profile before up-ing the other.
 
-### Pattern: environment override
+### Pattern: no env-driven upstream
 
-The overlay **overrides** the upstream LLM config to point at the
-in-container Ollama instead of the `.env` upstream:
-
-```yaml
-# In the overlay:
-litellm:
-  environment:
-    LLM_UPSTREAM_MODEL: ollama/medgemma-27b-q4_k_s
-    LLM_UPSTREAM_API_BASE: http://ollama:11434
-    LLM_UPSTREAM_API_KEY: dummy
-```
-
-This means your `.env` upstream values are **ignored** in GPU mode.
+There's no environment override to study here: `docker/litellm/config.yaml`
+hardcodes every model alias to `ollama/hf.co/...` at `http://ollama:11434`.
+That address only resolves once this overlay's `ollama-amd`/`ollama-nvidia`
+service (whichever profile is active) is running — there's no cloud or
+env-configurable upstream to fall back to, by design (medical data must stay
+local).
 
 > **Docs:** [Docker Compose — profiles](https://docs.docker.com/compose/profiles/),
 > [Merge compose files](https://docs.docker.com/compose/multiple-compose-files/merge/)
@@ -395,8 +388,9 @@ Each entry is an Ollama registry tag. The sidecar uses Python 3.11+'s
 [LiteLLM](https://docs.litellm.ai/docs/proxy/quick_start) is a proxy server
 that exposes a unified OpenAI-compatible API. Your app always calls the same
 endpoint (`http://litellm:4000/v1/chat/completions`) with a model alias;
-LiteLLM routes the call to the actual upstream (cloud, self-deployed, or
-local Ollama).
+LiteLLM routes the call to the actual model. Every alias here is hardcoded to
+an in-container Ollama model — there is deliberately no env-driven or cloud
+alias, since prompts carry patient data that must stay local.
 
 ### Pattern: model aliasing
 
@@ -408,25 +402,15 @@ model_list:
       model: ollama/hf.co/unsloth/medgemma-27b-text-it-GGUF:Q4_K_S
       api_base: http://ollama:11434
       api_key: dummy
-
-  - model_name: A                           # env-driven alias
-    litellm_params:
-      model: os.environ/LLM_UPSTREAM_MODEL
-      api_base: os.environ/LLM_UPSTREAM_API_BASE
-      api_key: os.environ/LLM_UPSTREAM_API_KEY
 ```
 
 The app code never knows which actual model is behind the alias. Swap
-models by editing config or env vars — zero code changes.
-
-### Pattern: `os.environ/` in config
-
-LiteLLM supports reading env vars directly in YAML via the `os.environ/`
-prefix. This lets you keep secrets in `.env` rather than the config file:
-
-```yaml
-model: os.environ/LLM_UPSTREAM_MODEL
-```
+models by editing this file — zero code changes. (LiteLLM does support an
+`os.environ/VAR` syntax for reading secrets/endpoints from the environment
+instead of hardcoding them here, useful if you ever needed a config-driven
+alias — but nothing in this codebase uses it, to keep the model list a fixed,
+auditable local-only set rather than something a stray env var could redirect
+to an external endpoint.)
 
 ### Pattern: custom success callback for audit logging
 
@@ -1815,7 +1799,7 @@ command: ["python", "-m", "debugpy", "--listen", "0.0.0.0:5678",
 | `docker/postgres/02-litellm.sh` | `\gexec` conditional database creation |
 | `docker/postgres/02-embedding.sql` | `halfvec`, HNSW index tuning |
 | `docker/postgres/03-fts.sql` | Generated tsvector, GIN index (removed — see appendix below) |
-| `docker/litellm/config.yaml` | Model aliasing, env-driven upstream, callback registration |
+| `docker/litellm/config.yaml` | Model aliasing to in-container Ollama, callback registration |
 | `docker/litellm/log_callback.py` | Custom LiteLLM callback, async DB logging |
 | `Dockerfile` | uv in Docker, layer caching, non-root user, unbuffered output |
 | `main.py` | FastAPI lifespan, router wiring |

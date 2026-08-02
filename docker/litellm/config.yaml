@@ -1,12 +1,10 @@
 # LiteLLM proxy configuration.
 #
-# - Routes the model name your app calls ("A", "B", "C", ...) to an upstream
-#   LLM. The upstream is configured entirely via environment variables set on
-#   the litellm container (see .env: LLM_UPSTREAM_MODEL / _API_BASE / _API_KEY),
-#   so you can point at a cloud provider (OpenAI, Anthropic, Azure), a
-#   self-deployed server (vLLM, TGI), or an Ollama you run on the host
-#   (LLM_UPSTREAM_API_BASE=http://host.docker.internal:11434) without editing
-#   this file.
+# - Routes each model alias below to the in-container Ollama instance at
+#   http://ollama:11434 (started by docker/docker-compose.gpu.yml). There is
+#   no cloud or remote-endpoint option, by design: this is a medical system,
+#   and prompts/patient data must never leave the trusted network. Add more
+#   local models by adding more `ollama/hf.co/...` entries below.
 # - LiteLLM_SpendLogs (via DATABASE_URL) records per-call tokens / cost / latency
 #   — cost is $0 for the local Ollama models, so that table isn't useful for
 #   inspecting prompts. Instead, the custom callback below (see

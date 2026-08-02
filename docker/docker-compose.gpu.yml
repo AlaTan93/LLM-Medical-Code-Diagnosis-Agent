@@ -1,25 +1,26 @@
 # Written by AI
-# Optional in-container GPU Ollama for the medicoder stack.
+# Required in-container GPU Ollama for the medicoder stack.
 #
 # Loaded ON TOP of docker-compose.yml (+ docker-compose.debug.yml for the debug
-# flow) to run the LLM locally on a GPU instead of a cloud/host endpoint. Two
-# mutually-exclusive Ollama services, selected by compose profile; each answers
-# to the network alias `ollama`, so the litellm override below can target
-# http://ollama:11434 regardless of which GPU vendor is active.
+# flow) to run the medical LLMs locally on a GPU. LiteLLM's model_list
+# (docker/litellm/config.yaml) is hardcoded to http://ollama:11434, and that
+# network alias only exists once this overlay is running — docker-compose.yml
+# alone cannot serve any model. Two mutually-exclusive Ollama services,
+# selected by compose profile; each answers to the network alias `ollama`,
+# so LiteLLM can reach it regardless of which GPU vendor is active.
 #
 #   AMD (ROCm):    docker compose -f docker-compose.yml \
 #                        -f docker/docker-compose.gpu.yml --profile gpu-amd up
 #   NVIDIA (CUDA): docker compose -f docker-compose.yml \
 #                        -f docker/docker-compose.gpu.yml --profile gpu-nvidia up
 #
-# Default stack stays env-only (cloud / host Ollama); this file is opt-in.
-#
 # The container Ollama is FULLY ISOLATED: it has NO host port published, so it
 # never clashes with an Ollama you run on the host (e.g. your native one on
-# 11434). It is reachable only inside the compose network as http://ollama:11434
-# (the `ollama` alias is set on whichever GPU service is active). Host-side
-# admin goes through `docker compose exec ollama-amd ollama ...` or the
-# ollama-init sidecar (models.toml).
+# 11434), and nothing it processes ever leaves this machine. It is reachable
+# only inside the compose network as http://ollama:11434 (the `ollama` alias
+# is set on whichever GPU service is active). Host-side admin goes through
+# `docker compose exec ollama-amd ollama ...` or the ollama-init sidecar
+# (models.toml).
 #
 # ollama-init auto-pulls every `ollama`-kind entry in models.toml when the stack
 # comes up (profiles gpu-amd / gpu-nvidia). It polls http://ollama:11434 until
@@ -88,16 +89,6 @@ services:
       PYTHONUNBUFFERED: "1"                  # stream script output live to `docker logs`
     command: ["python", "/pull_models.py"]
     restart: "no"
-
-  # Whenever this overlay is loaded, repoint LiteLLM's alias at the local
-  # Ollama (whichever GPU service is active via its profile). These env vars
-  # override the .env values set on the base litellm service. In-network URL:
-  # http://ollama:11434 (no host port involved).
-  litellm:
-    environment:
-      LLM_UPSTREAM_MODEL: ollama/${OLLAMA_MODEL:-llama3.2}
-      LLM_UPSTREAM_API_BASE: http://ollama:11434
-      LLM_UPSTREAM_API_KEY: dummy
 
 volumes:
   ollama-models:

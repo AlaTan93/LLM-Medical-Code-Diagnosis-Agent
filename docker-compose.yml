@@ -1,14 +1,17 @@
 # Written by AI
 # medicoder-technical
 #
-# Default (3 containers): docker compose up --build
-#   postgres + medicoder + litellm
+# This file alone (postgres + medicoder + litellm) is not runnable: LiteLLM's
+# model_list (docker/litellm/config.yaml) is hardcoded to in-container Ollama
+# models at http://ollama:11434, and that network alias only exists once the
+# GPU overlay is loaded. Always run with it:
+#   docker compose -f docker-compose.yml -f docker/docker-compose.gpu.yml \
+#       --profile gpu-amd up      # or --profile gpu-nvidia
 #
-# LiteLLM is always hosted locally. It routes the model alias the app calls
-# (e.g. "A") to an upstream LLM configured in .env — any OpenAI-compatible
-# endpoint works: a cloud provider (OpenAI, Anthropic, Azure), a self-deployed
-# server (vLLM, TGI), or an Ollama you run on the host
-# (LLM_UPSTREAM_API_BASE=http://host.docker.internal:11434).
+# LiteLLM never leaves the machine: every model it routes to is a local,
+# in-container Ollama instance — no cloud provider, no remote endpoint, no
+# escape hatch. This is deliberate: it's a medical system, and patient data
+# in the prompts must not leave the trusted network.
 # Every call + response is audited to Postgres (LiteLLM_SpendLogs).
 
 services:
@@ -35,19 +38,16 @@ services:
     restart: unless-stopped
 
   litellm:
-    # Local proxy: routes the app's API calls to the upstream LLM and
-    # audits every call/response to Postgres (LiteLLM_SpendLogs via DATABASE_URL
-    # + Prisma migration on first boot).
+    # Local proxy: routes the app's API calls to the in-container Ollama
+    # models (docker/litellm/config.yaml) and audits every call/response to
+    # Postgres (LiteLLM_SpendLogs via DATABASE_URL + Prisma migration on
+    # first boot). No cloud or remote endpoint is configurable.
     image: ghcr.io/berriai/litellm:main-stable
     volumes:
       - ./docker/litellm/config.yaml:/app/config.yaml:ro
       - ./docker/litellm/log_callback.py:/app/log_callback.py:ro
     environment:
       DATABASE_URL: postgresql://litellm:${LITELLM_DB_PASSWORD:?set LITELLM_DB_PASSWORD in .env}@postgres:5432/litellm
-      # Use a LiteLLM provider prefix, e.g. openai/gpt-4o-mini, anthropic/claude-...
-      LLM_UPSTREAM_MODEL: ${LLM_UPSTREAM_MODEL:?set LLM_UPSTREAM_MODEL in .env}
-      LLM_UPSTREAM_API_BASE: ${LLM_UPSTREAM_API_BASE:?set LLM_UPSTREAM_API_BASE in .env}
-      LLM_UPSTREAM_API_KEY: ${LLM_UPSTREAM_API_KEY:?set LLM_UPSTREAM_API_KEY in .env}
     command:
       - "--config"
       - "/app/config.yaml"
@@ -59,9 +59,6 @@ services:
     # http://litellm:4000/v1 by the medicoder app), so the only public way to
     # reach the models is through the app's POST /test/{model} endpoint.
     # The healthcheck below is intra-container (localhost:4000) and still works.
-    # Lets the proxy reach an LLM you run on the host (e.g. a local Ollama).
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     healthcheck:
       # curl-free (the image may not ship curl); /health/liveliness returns 200 fast.
       test:
@@ -88,7 +85,7 @@ services:
       PGUSER: medicoder
       PGPASSWORD: ${MEDICODER_PASSWORD:?set MEDICODER_PASSWORD in .env}
       ICD10_FILE: /app/icd10cm_order_2026.txt
-      # Points at the local LiteLLM proxy (alias -> upstream LLM).
+      # Points at the local LiteLLM proxy (alias -> in-container Ollama model).
       LLM_BASE_URL: ${LLM_BASE_URL:-http://litellm:4000/v1}
       # LLM proxy timeouts & token limits (medicoder/proxy.py).
       CHAT_TIMEOUT: ${CHAT_TIMEOUT:-300.0}
