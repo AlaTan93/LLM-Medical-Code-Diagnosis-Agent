@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1
 #
+# Written by AI
 # medicoder program container.
 # Python 3.13 + uv (deps pinned by uv.lock). Runs the idempotent ICD-10 loader
 # on boot, then the application command.

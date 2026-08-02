@@ -1,3 +1,4 @@
+# Written by AI
 """Postgres connection pool for the medicoder app.
 
 A single process-wide ``ConnectionPool`` created by the FastAPI lifespan in

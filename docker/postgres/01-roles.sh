@@ -1,4 +1,5 @@
 #!/bin/sh
+# Written by AI
 # Runs once on an empty data volume, after 00-schema.sql.
 # Creates the application role used by the program container:
 #   - medicoder : read/write, owns icd10_codes (used for ingestion + the app)

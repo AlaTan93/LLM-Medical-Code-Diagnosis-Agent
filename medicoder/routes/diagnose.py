@@ -1,3 +1,4 @@
+# Written by AI
 """Dual-diagnosis pipeline: two medical models + ICD-10 vector search.
 
 Uses a LangGraph :class:`StateGraph` to run two medical models in parallel

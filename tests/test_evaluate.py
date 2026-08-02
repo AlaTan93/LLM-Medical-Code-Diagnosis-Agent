@@ -1,3 +1,4 @@
+# Written by AI
 """Tests for ``evaluate`` — code normalization and metric computations.
 
 Tests the pure helpers used by the host-side evaluator that don't need a

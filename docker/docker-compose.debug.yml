@@ -1,3 +1,4 @@
+# Written by AI
 # Debug override for the medicoder service.
 #
 # Start the app under debugpy (waiting for VSCode to attach), with the source

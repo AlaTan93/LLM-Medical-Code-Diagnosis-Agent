@@ -1,3 +1,4 @@
+# Written by AI
 # medicoder-technical
 #
 # Default (3 containers): docker compose up --build
@@ -34,7 +35,7 @@ services:
     restart: unless-stopped
 
   litellm:
-    # Local proxy: routes the app's model alias ("A") to the upstream LLM and
+    # Local proxy: routes the app's API calls to the upstream LLM and
     # audits every call/response to Postgres (LiteLLM_SpendLogs via DATABASE_URL
     # + Prisma migration on first boot).
     image: ghcr.io/berriai/litellm:main-stable
@@ -43,7 +44,6 @@ services:
       - ./docker/litellm/log_callback.py:/app/log_callback.py:ro
     environment:
       DATABASE_URL: postgresql://litellm:${LITELLM_DB_PASSWORD:?set LITELLM_DB_PASSWORD in .env}@postgres:5432/litellm
-      # Upstream the alias "A" resolves to (see docker/litellm/config.yaml).
       # Use a LiteLLM provider prefix, e.g. openai/gpt-4o-mini, anthropic/claude-...
       LLM_UPSTREAM_MODEL: ${LLM_UPSTREAM_MODEL:?set LLM_UPSTREAM_MODEL in .env}
       LLM_UPSTREAM_API_BASE: ${LLM_UPSTREAM_API_BASE:?set LLM_UPSTREAM_API_BASE in .env}

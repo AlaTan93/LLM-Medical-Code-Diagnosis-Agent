@@ -1,3 +1,4 @@
+# Written by AI
 """Analyze debate-critic performance vs Model A and Model B.
 
 For every case where the debate-critic was triggered, compares the critic's

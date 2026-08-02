@@ -1,3 +1,4 @@
+# Written by AI
 """Shared medical pipeline functions used by ``/code`` and ``/diagnose``.
 
 - :func:`diagnose` — forwards clinical text to a medical model and returns

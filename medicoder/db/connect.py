@@ -1,3 +1,4 @@
+# Written by AI
 """Shared Postgres connection for CLI scripts.
 
 ``load_icd10.py`` and ``embed_icd10.py`` both need a direct ``psycopg``

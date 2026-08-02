@@ -34,11 +34,6 @@ model_list:
       model: ollama/hf.co/Intelligent-Internet/II-Medical-8B-1706-GGUF:Q8_0
       api_base: http://ollama:11434
       api_key: dummy
-  # - model_name: qwen35-medical
-  #   litellm_params:
-  #     model: ollama/hf.co/qaootkcx/qwen35-9b-medical:Q4_K_M
-  #     api_base: http://ollama:11434
-  #     api_key: dummy
 
   # Embedding model for ICD-10 vector similarity search (2560-dim zembed-1).
   # The app calls POST /v1/embeddings {"model": "embed", "input": [...]}.

@@ -1,4 +1,5 @@
 #!/bin/sh
+# Written by AI
 # Debug entrypoint for the medicoder container.
 #
 # Run by docker/docker-compose.debug.yml (command: sh /debug.sh) AFTER the

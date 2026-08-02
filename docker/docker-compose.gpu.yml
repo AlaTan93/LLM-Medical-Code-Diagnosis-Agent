@@ -1,3 +1,4 @@
+# Written by AI
 # Optional in-container GPU Ollama for the medicoder stack.
 #
 # Loaded ON TOP of docker-compose.yml (+ docker-compose.debug.yml for the debug

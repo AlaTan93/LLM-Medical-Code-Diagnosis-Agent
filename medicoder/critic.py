@@ -1,3 +1,4 @@
+# Written by AI
 """Agentic debate-critic with read-only database access.
 
 When the two medical models in the dual-diagnosis pipeline disagree (different

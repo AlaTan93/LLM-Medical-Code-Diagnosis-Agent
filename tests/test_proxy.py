@@ -1,3 +1,4 @@
+# Written by AI
 """Tests for ``medicoder.proxy`` — thinking block separation.
 
 Tests the three ``<think>`` block patterns produced by local reasoning models:

@@ -1,3 +1,4 @@
+# Written by AI
 """Pydantic models and shared types for the API."""
 
 from __future__ import annotations

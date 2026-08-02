@@ -1,3 +1,4 @@
+# Written by AI
 """Evaluator: measure ICD-10-CM coding accuracy of the /diagnose pipeline.
 
 Runs on the host outside the container. Loads test cases from

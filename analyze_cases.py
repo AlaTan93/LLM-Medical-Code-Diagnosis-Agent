@@ -1,3 +1,4 @@
+# Written by AI
 """Rank test cases by identification difficulty across all eval runs.
 
 Loads every ``eval_output*.json`` from the repo root, aggregates per-case

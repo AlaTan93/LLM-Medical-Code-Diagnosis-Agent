@@ -1,3 +1,4 @@
+# Written by AI
 """Tests for ``analyze_critic`` — verdict comparison logic.
 
 Tests ``_compare`` and ``_f1`` — the pure functions that determine whether

@@ -1,3 +1,4 @@
+# Written by AI
 """ICD-10-CM code lookup routes (Postgres-backed)."""
 
 from __future__ import annotations

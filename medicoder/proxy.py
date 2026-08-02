@@ -1,3 +1,4 @@
+# Written by AI
 """Thin client for the in-network LiteLLM proxy.
 
 Every route calls these functions instead of building raw urllib

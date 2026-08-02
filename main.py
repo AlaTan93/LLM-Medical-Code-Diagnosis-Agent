@@ -1,3 +1,4 @@
+# Written by AI
 """medicoder-technical FastAPI app.
 
 Thin assembly: creates the app, wires the lifespan (Postgres pool) and includes
@@ -44,10 +45,10 @@ def health() -> dict[str, str]:
     """
     return {"status": "ok"}
 
-
-app.include_router(icd10.router)
-app.include_router(llm.router)
-app.include_router(code.router)
+### Testing routers, not meant to be used in production
+#app.include_router(icd10.router)
+#app.include_router(llm.router)
+#app.include_router(code.router)
 app.include_router(diagnose.router)
 
 

@@ -1,3 +1,4 @@
+# Written by AI
 """Custom LiteLLM success callback.
 
 Logs every LLM call — prompt, thinking, output, and tool calls — to the

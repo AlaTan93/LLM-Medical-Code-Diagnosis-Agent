@@ -1,3 +1,4 @@
+# Written by AI
 """Tests for ``medicoder.medical`` — JSON extraction and diagnosis parsing.
 
 Covers the pure-function helpers that don't require a DB or LLM connection:

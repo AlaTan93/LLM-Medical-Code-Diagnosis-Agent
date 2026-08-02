@@ -1,3 +1,4 @@
+-- Written by AI
 -- Vector similarity search for ICD-10-CM codes.
 -- The pgvector extension is already installed by 00-schema.sql; this file adds
 -- the embedding column + HNSW index over billable rows.

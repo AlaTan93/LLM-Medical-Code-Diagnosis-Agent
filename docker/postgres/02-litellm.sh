@@ -1,4 +1,5 @@
 #!/bin/sh
+# Written by AI
 # Runs once on an empty data volume, after 01-roles.sh.
 # Creates the role + database that LiteLLM uses for call/response auditing.
 # LiteLLM runs Prisma migrations on first boot to create its tables

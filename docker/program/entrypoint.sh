@@ -1,4 +1,5 @@
 #!/bin/sh
+# Written by AI
 # Entrypoint for the medicoder program container.
 # Ensures the ICD-10 data is loaded (idempotent), then hands off to the command.
 set -e

@@ -1,3 +1,4 @@
+# Written by AI
 """Deterministic coding pipeline: medical diagnoses + ICD-10 vector search.
 
 Two-step pipeline that runs in fixed order (no LLM orchestration needed):

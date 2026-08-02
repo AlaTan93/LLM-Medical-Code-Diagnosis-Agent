@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Sidecar: auto-pull every model in models.toml into the running Ollama when
+"""Written by AI
+Sidecar: auto-pull every model in models.toml into the running Ollama when
 the GPU compose stack comes up.
 
 Run by the ``ollama-init`` service in docker/docker-compose.gpu.yml (profiles

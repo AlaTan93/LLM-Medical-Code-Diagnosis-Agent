@@ -1,3 +1,4 @@
+# Written by AI
 """Idempotent bulk embedder for ICD-10-CM codes.
 
 Embeds the ``long_desc`` of every ``icd10_codes`` row (billable and

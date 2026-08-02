@@ -1,3 +1,4 @@
+-- Written by AI
 -- Runs once on an empty data volume, as the bootstrap superuser.
 -- See: docker/postgres/01-roles.sh for role creation + grants.
 
