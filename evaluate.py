@@ -161,10 +161,13 @@ def _query_token_usage(since_ts: str) -> dict | None:
         return None
 
     try:
+        from psycopg.rows import dict_row
+
         conn = psycopg.connect(
             f"host=localhost port=5432 dbname=litellm "
             f"user=litellm password={password}"
         )
+        conn.row_factory = dict_row
         rows = conn.execute(
             "SELECT model, "
             "  COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens, "

@@ -392,15 +392,6 @@ cervix uteri*). Stripping the qualifier from the embedding input fixes this
 (similarity rises to ~0.99) without changing the stored `long_desc`. This
 affects ~29k codes (23k billable).
 
-### Full-text search index (historical)
-
-`docker/postgres/03-fts.sql` adds a generated `search_tsv` tsvector column and
-GIN index. FTS was integrated alongside pgvector for hybrid search but was
-removed after replay testing showed net-negative impact. The "unspecified"
-embedding problem it addressed was solved by embedding text cleaning instead.
-The SQL artifact remains in the schema for documentation; no application code
-references it.
-
 ## Evaluation & analysis tools
 
 Three host-side scripts measure pipeline accuracy and diagnose failures. All
@@ -515,7 +506,6 @@ docker/postgres/00-schema.sql    extension + icd10_codes table + indexes
 docker/postgres/01-roles.sh      medicoder (rw) role
 docker/postgres/02-litellm.sh    litellm role + audit database
 docker/postgres/02-embedding.sql pgvector embedding column + HNSW index (2560-dim)
-docker/postgres/03-fts.sql       generated tsvector column + GIN index for hybrid search
 docker/litellm/config.yaml       LiteLLM alias -> upstream routing + DB logging
 docker/litellm/log_callback.py   custom callback -> llm_call_log (prompts/thinking/output/tools)
 medicoder/proxy.py               shared LiteLLM client: chat_completion() -> (output, thinking), embed(), extract_thinking() — all timeouts/token limits env-driven

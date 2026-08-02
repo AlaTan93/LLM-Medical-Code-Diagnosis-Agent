@@ -1813,7 +1813,7 @@ command: ["python", "-m", "debugpy", "--listen", "0.0.0.0:5678",
 | `docker/postgres/01-roles.sh` | Idempotent role creation (DO blocks) |
 | `docker/postgres/02-litellm.sh` | `\gexec` conditional database creation |
 | `docker/postgres/02-embedding.sql` | `halfvec`, HNSW index tuning |
-| `docker/postgres/03-fts.sql` | Generated tsvector, GIN index |
+| `docker/postgres/03-fts.sql` | Generated tsvector, GIN index (removed — see appendix below) |
 | `docker/litellm/config.yaml` | Model aliasing, env-driven upstream, callback registration |
 | `docker/litellm/log_callback.py` | Custom LiteLLM callback, async DB logging |
 | `Dockerfile` | uv in Docker, layer caching, non-root user, unbuffered output |
@@ -1928,12 +1928,6 @@ demand rather than on every search.
 
 ### What remains
 
-The `search_tsv` generated column and GIN index (`docker/postgres/03-fts.sql`)
-remain in the database schema. They are:
-
-- **Harmless** — Postgres maintains generated columns automatically; the GIN
-  index adds ~5 MB of storage but zero query overhead when not referenced
-- **Documented** — they show the engineering journey from hybrid to pure
-  vector search
-
+The `search_tsv` generated column and GIN index (defined in `docker/postgres/03-fts.sql`,
+now removed from the active schema) were part of the database during development.
 No application code references `search_tsv` or any FTS function.
