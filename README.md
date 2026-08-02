@@ -227,8 +227,8 @@ Uses a LangGraph `StateGraph`:
 
 ```
 START
-  ├──→ diagnose_a (medgemma-27b-q4_k_s)     ──┐
-  ├──→ diagnose_b (deepseek-r1-medical-cot) ──┤  parallel
+  ├──→ diagnose_a (deepseek-r1-medical-cot)     ──┐
+  ├──→ diagnose_b (medgemma-27b-q4_k_s) ──┤  parallel
   │                                          ↓
   │                                     fan-in
   │                                          ↓
@@ -257,7 +257,7 @@ round (the critic reuses `medgemma-27b-q4_k_s`, already loaded in VRAM).
 ### Debate-critic loop
 
 When the two models disagree, the critic agent (`CRITIC_MODEL`, default
-`medgemma-27b-q4_k_s`, temp=0.25, 8192 tokens) receives both models'
+`medgemma-27b-q4_k_s`, temp=0.1, 8192 tokens) receives both models'
 diagnoses, ICD-10 codes, reasoning, and any previous round history. It produces
 its own reconciled diagnoses plus optional search queries that are embedded and
 matched against the ICD-10 code database. The critic signals `done: true` when
@@ -278,7 +278,7 @@ see `.env.example` for the full list with comments):
 | `MODEL_B` | `deepseek-r1-medical-cot` | Second medical model (LiteLLM alias). |
 | `CRITIC_MODEL` | `medgemma-27b-q4_k_s` | Critic model for the reconciliation loop. |
 | `MAX_CRITIC_ROUNDS` | `2` | Max reconciliation rounds (0 = disabled). |
-| `CRITIC_TEMP` | `0.25` | Critic sampling temperature. |
+| `CRITIC_TEMP` | `0.1` | Critic sampling temperature. |
 | `CRITIC_MAX_TOKENS` | `8192` | Critic token budget per round. |
 
 **Diagnose pipeline:**
