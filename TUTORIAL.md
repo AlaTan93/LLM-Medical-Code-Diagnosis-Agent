@@ -1200,7 +1200,7 @@ search (lexical) and merges the results.
 ```python
 def search_icd10(queries: list[str], k: int = 3) -> list[ICD10Match]:
     vectors = proxy.embed(queries)  # ONE API call for all diagnoses
-    cand_k = k * _CANDIDATE_MULT    # over-fetch: k=3 → 15 candidates
+    cand_k = _CANDIDATE_K           # over-fetch: SEARCH_CANDIDATE_K, default 15
 
     with get_pool().connection() as conn:
         conn.execute("SET LOCAL hnsw.ef_search = 200")
@@ -1216,11 +1216,12 @@ All diagnoses are embedded in a single API call (not one per diagnosis).
 
 ### Pattern: candidate over-fetching
 
-Fetch `k * 5` candidates from each source, then take the top `k` after
-merging. This gives the merge step more material to work with:
+Fetch a fixed `SEARCH_CANDIDATE_K` candidates from each source (default 15),
+then take the top `k` after merging. This gives the merge step more
+material to work with:
 
 ```python
-cand_k = k * _CANDIDATE_MULT  # k=3 → 15 candidates from each source
+cand_k = _CANDIDATE_K  # SEARCH_CANDIDATE_K, default 15
 ```
 
 ### Pattern: FTS AND → OR fallback

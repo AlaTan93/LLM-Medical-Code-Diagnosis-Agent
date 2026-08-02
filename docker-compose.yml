@@ -110,7 +110,7 @@ services:
       CRITIC_MAX_TOKENS: ${CRITIC_MAX_TOKENS:-8192}
       CRITIC_MAX_TOOL_CALLS: ${CRITIC_MAX_TOOL_CALLS:-8}
       # Search tuning (medicoder/medical.py — vector similarity).
-      SEARCH_CANDIDATE_MULT: ${SEARCH_CANDIDATE_MULT:-5}
+      SEARCH_CANDIDATE_K: ${SEARCH_CANDIDATE_K:-15}
       # Embedding batch size (medicoder/db/embed_icd10.py).
       EMBED_BATCH_SIZE: ${EMBED_BATCH_SIZE:-128}
       # DeepAgent models are reached via LangChain's `openai:` provider, which

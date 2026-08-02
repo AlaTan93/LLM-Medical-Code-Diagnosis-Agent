@@ -296,7 +296,7 @@ see `.env.example` for the full list with comments):
 
 | Variable | Default | Description |
 |---|---|---|
-| `SEARCH_CANDIDATE_MULT` | `5` | Over-fetch multiplier for candidates. |
+| `SEARCH_CANDIDATE_K` | `15` | Candidates fetched per query before dedup/ranking. |
 
 **LLM proxy & embedding:**
 

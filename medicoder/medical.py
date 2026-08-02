@@ -29,7 +29,7 @@ _MAX_TEMP = float(os.environ.get("DIAGNOSE_MAX_TEMP", "0.3"))
 _DIAGNOSE_TOKENS = int(os.environ.get("DIAGNOSE_MAX_TOKENS", "4096"))
 _DIAGNOSE_CONCISE_TOKENS = int(os.environ.get("DIAGNOSE_CONCISE_TOKENS", "2048"))
 
-_CANDIDATE_MULT = int(os.environ.get("SEARCH_CANDIDATE_MULT", "5"))
+_CANDIDATE_K = int(os.environ.get("SEARCH_CANDIDATE_K", "15"))
 
 _DIAGNOSE_SYSTEM = (
     "Analyze the patient's clinical presentation, then produce diagnoses "
@@ -368,9 +368,8 @@ def search_icd10(queries: list[str], k: int = 3) -> list[ICD10Match]:
 
     Each query is embedded (batched in one API call) and matched against
     code embeddings via pgvector HNSW cosine-similarity.  The top
-    ``k * _CANDIDATE_MULT`` candidates per query are fetched, then
-    deduplicated across queries (keeping the highest similarity), and the
-    top *k* are returned.
+    ``_CANDIDATE_K`` candidates per query are fetched, then deduplicated
+    across queries (keeping the highest similarity), then returned.
 
     Args:
         queries: Diagnosis descriptions to match against ICD-10 codes.
@@ -383,7 +382,7 @@ def search_icd10(queries: list[str], k: int = 3) -> list[ICD10Match]:
         return []
 
     vectors = proxy.embed(queries)
-    cand_k = k * _CANDIDATE_MULT
+    cand_k = _CANDIDATE_K
     seen: dict[str, ICD10Match] = {}
 
     with get_pool().connection() as conn:

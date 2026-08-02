@@ -70,12 +70,15 @@ def _cat_recall(gt: set[str], codes: list[str]) -> float:
 
 
 def _cat_precision(gt: set[str], codes: list[str], denom: int) -> float:
-    """Fraction of *denom* whose 3-char category matches a GT code.
+    """GT codes captured by category, over the same denom as exact precision.
 
-    Uses the same ``denom`` (``max(dx_cnt, gt_cnt)``) as exact precision
-    rather than ``len(codes)``, since ``codes`` may hold multiple candidate
-    matches per diagnosis (up to ``k`` each) -- dividing by its raw length
-    would understate precision relative to the exact-match metric.
+    Shares its numerator with :func:`_cat_recall` (count of GT codes whose
+    3-char category appears somewhere in *codes*) but divides by ``denom``
+    (``max(dx_cnt, gt_cnt)``) instead of ``len(gt)`` -- mirroring how exact
+    recall and precision share one ``tp`` over two denominators. Dividing
+    the raw per-code category-match count by ``denom`` instead would let
+    precision exceed 1.0, since multiple candidate codes per diagnosis can
+    share the same category.
 
     Args:
         gt: Set of normalised ground-truth codes.
@@ -87,8 +90,9 @@ def _cat_precision(gt: set[str], codes: list[str], denom: int) -> float:
     """
     if not denom:
         return 0.0
-    gt_cats = {c[:3] for c in gt}
-    return sum(1 for c in codes if c[:3] in gt_cats) / denom
+    pred_cats = {c[:3] for c in codes}
+    tp_cat = sum(1 for g in gt if g[:3] in pred_cats)
+    return tp_cat / denom
 
 
 def _f1(recall: float, precision: float) -> float:
