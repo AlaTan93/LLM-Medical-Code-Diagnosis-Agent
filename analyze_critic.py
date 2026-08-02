@@ -95,6 +95,92 @@ def _dx_str(diagnoses: list[str], limit: int = 3) -> str:
     return f"[{head}{suffix}]"
 
 
+def _short_model(name: str) -> str:
+    """Shorten an Ollama registry tag for display.
+
+    ``hf.co/unsloth/medgemma-27b-text-it-GGUF:Q4_K_S`` → ``medgemma-27b-text-it``
+    """
+    name = name.replace("hf.co/", "")
+    if "/" in name:
+        name = name.rsplit("/", 1)[-1]
+    name = name.split("-GGUF")[0]
+    if ":" in name:
+        name = name.rsplit(":", 1)[0]
+    return name[:30]
+
+
+def _collect_perf_stats(details: list[dict]) -> dict:
+    """Collect elapsed time and per-call token data from all cases.
+
+    Returns a dict with:
+    - ``elapsed``: list of ``elapsed_s`` values (all cases)
+    - ``model_tokens``: ``{model: [(prompt_per_call, completion_per_call), ...]}``
+    """
+    elapsed = [
+        d.get("elapsed_s", 0) for d in details if d.get("elapsed_s")
+    ]
+
+    model_tokens: dict[str, list[tuple[float, float]]] = {}
+    for d in details:
+        tu = d.get("token_usage")
+        if not tu or not isinstance(tu, dict):
+            continue
+        for model, stats in tu.items():
+            if model == "_combined":
+                continue
+            calls = stats.get("calls", 0)
+            if not calls:
+                continue
+            model_tokens.setdefault(model, []).append((
+                stats.get("prompt_tokens", 0) / calls,
+                stats.get("completion_tokens", 0) / calls,
+            ))
+
+    return {"elapsed": elapsed, "model_tokens": model_tokens}
+
+
+def _print_perf_stats(stats: dict) -> None:
+    """Print time and per-call token statistics."""
+    elapsed = stats.get("elapsed", [])
+    model_tokens = stats.get("model_tokens", {})
+
+    if not elapsed and not model_tokens:
+        return
+
+    print(f"\n{'─' * 60}")
+    print("Performance stats")
+    print(f"{'─' * 60}")
+
+    if elapsed:
+        avg = sum(elapsed) / len(elapsed)
+        print(
+            f"  Time per case ({len(elapsed)} cases):  "
+            f"avg {avg:.1f}s   min {min(elapsed):.1f}s   "
+            f"max {max(elapsed):.1f}s"
+        )
+
+    for model, values in sorted(model_tokens.items()):
+        short = _short_model(model)
+        prompts = [v[0] for v in values]
+        completions = [v[1] for v in values]
+        n = len(values)
+        print(f"\n  Tokens per call ({short}, {n} cases):")
+        print(
+            f"    Input:    "
+            f"avg {sum(prompts) / n:,.0f}   "
+            f"min {min(prompts):,.0f}   "
+            f"max {max(prompts):,.0f}"
+        )
+        print(
+            f"    Output:   "
+            f"avg {sum(completions) / n:,.0f}   "
+            f"min {min(completions):,.0f}   "
+            f"max {max(completions):,.0f}"
+        )
+
+    print(f"{'─' * 60}")
+
+
 # ---------------------------------------------------------------------------
 # Per-file analysis
 # ---------------------------------------------------------------------------
@@ -226,6 +312,10 @@ def analyze_file(path: str) -> dict:
                    notable_up)
     _print_notable("Notable regressions (recall delta < -0.3 vs Best):",
                    notable_down)
+
+    # -- Performance stats --------------------------------------------------
+    perf = _collect_perf_stats(details)
+    _print_perf_stats(perf)
 
     summary["both_up"] = both_up
     summary["both_down"] = both_down
