@@ -23,7 +23,15 @@ import sys
 
 
 def _f1(recall: float, precision: float) -> float:
-    """Harmonic mean of recall and precision (0 when both are 0)."""
+    """Harmonic mean of recall and precision (0 when both are 0).
+
+    Args:
+        recall: Recall value (0.0-1.0).
+        precision: Precision value (0.0-1.0).
+
+    Returns:
+        F1 score (0.0-1.0).
+    """
     denom = recall + precision
     return 2 * recall * precision / denom if denom else 0.0
 
@@ -60,6 +68,15 @@ def _compare(
     """Compare critic vs model on recall (primary) then top-1 (tiebreaker).
 
     Returns ``"+"`` (improved), ``"-"`` (regressed), or ``"="`` (same).
+
+    Args:
+        c_rec: Critic recall.
+        c_top1: Critic top-1 hit.
+        m_rec: Model recall.
+        m_top1: Model top-1 hit.
+
+    Returns:
+        ``"+"`` if critic improved, ``"-"`` if regressed, ``"="`` if same.
     """
     if c_rec > m_rec + 0.001:
         return "+"
@@ -73,12 +90,27 @@ def _compare(
 
 
 def _t1(hit: bool) -> str:
-    """Compact top-1 indicator: ``"+"`` for hit, ``"-"`` for miss."""
+    """Compact top-1 indicator.
+
+    Args:
+        hit: Whether the top-1 code matched.
+
+    Returns:
+        ``"+"`` for hit, ``"-"`` for miss.
+    """
     return "+" if hit else "-"
 
 
 def _codes_str(codes: list[str], limit: int = 10) -> str:
-    """Format a code list for display, truncating with an ellipsis."""
+    """Format a code list for display, truncating with an ellipsis.
+
+    Args:
+        codes: List of code strings.
+        limit: Maximum codes to show before truncating.
+
+    Returns:
+        Formatted string like ``"[A, B, C, ...]"`` or ``"(none)"``.
+    """
     if not codes:
         return "(none)"
     head = ", ".join(codes[:limit])
@@ -87,7 +119,15 @@ def _codes_str(codes: list[str], limit: int = 10) -> str:
 
 
 def _dx_str(diagnoses: list[str], limit: int = 3) -> str:
-    """Format a diagnosis list for display."""
+    """Format a diagnosis list for display.
+
+    Args:
+        diagnoses: List of diagnosis strings.
+        limit: Maximum diagnoses to show before truncating.
+
+    Returns:
+        Formatted string like ``"[dx1; dx2; ...]"`` or ``"(none)"``.
+    """
     if not diagnoses:
         return "(none)"
     head = "; ".join(diagnoses[:limit])
@@ -98,7 +138,13 @@ def _dx_str(diagnoses: list[str], limit: int = 3) -> str:
 def _short_model(name: str) -> str:
     """Shorten an Ollama registry tag for display.
 
-    ``hf.co/unsloth/medgemma-27b-text-it-GGUF:Q4_K_S`` → ``medgemma-27b-text-it``
+    ``hf.co/unsloth/medgemma-27b-text-it-GGUF:Q4_K_S`` -> ``medgemma-27b-text-it``
+
+    Args:
+        name: Full Ollama model tag.
+
+    Returns:
+        Shortened model name (max 30 chars).
     """
     name = name.replace("hf.co/", "")
     if "/" in name:
@@ -112,9 +158,12 @@ def _short_model(name: str) -> str:
 def _collect_perf_stats(details: list[dict]) -> dict:
     """Collect elapsed time and per-call token data from all cases.
 
-    Returns a dict with:
-    - ``elapsed``: list of ``elapsed_s`` values (all cases)
-    - ``model_tokens``: ``{model: [(prompt_per_call, completion_per_call), ...]}``
+    Args:
+        details: List of per-case detail dicts.
+
+    Returns:
+        Dict with ``"elapsed"`` (list of floats) and ``"model_tokens"``
+        (``{model: [(prompt_per_call, completion_per_call), ...]}``).
     """
     elapsed = [
         d.get("elapsed_s", 0) for d in details if d.get("elapsed_s")
@@ -140,7 +189,12 @@ def _collect_perf_stats(details: list[dict]) -> dict:
 
 
 def _print_perf_stats(stats: dict) -> None:
-    """Print time and per-call token statistics."""
+    """Print time and per-call token statistics.
+
+    Args:
+        stats: Dict from :func:`_collect_perf_stats` with ``"elapsed"``
+            and ``"model_tokens"`` keys.
+    """
     elapsed = stats.get("elapsed", [])
     model_tokens = stats.get("model_tokens", {})
 
@@ -189,7 +243,11 @@ def _print_perf_stats(stats: dict) -> None:
 def analyze_file(path: str) -> dict:
     """Analyze one eval_output file and print a per-case comparison table.
 
-    Returns a summary dict for cross-file aggregation.
+    Args:
+        path: Path to an ``eval_output*.json`` file.
+
+    Returns:
+        Summary dict with verdict counts for cross-file aggregation.
     """
     with open(path) as f:
         data = json.load(f)
@@ -323,7 +381,13 @@ def analyze_file(path: str) -> dict:
 
 
 def _print_notable(title: str, entries: list[dict]) -> None:
-    """Print detail for cases where the critic made a big difference."""
+    """Print detail for cases where the critic made a big difference.
+
+    Args:
+        title: Section heading to print.
+        entries: List of notable-case dicts (each with ``case``, ``gt``,
+            ``a``, ``b``, ``c``, ``rounds``, ``delta_best``).
+    """
     if not entries:
         return
     print(f"\n{title}")
@@ -347,6 +411,7 @@ def _print_notable(title: str, entries: list[dict]) -> None:
 
 
 def main() -> None:
+    """CLI entry point -- parse args, analyze files, print cross-file aggregate."""
     paths: list[str] = []
     for arg in sys.argv[1:]:
         matched = glob.glob(arg)

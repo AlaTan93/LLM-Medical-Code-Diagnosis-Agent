@@ -45,6 +45,12 @@ def _clean_embed_text(desc: str) -> str:
         'Malignant neoplasm of cervix uteri'
         >>> _clean_embed_text("Unspecified viral encephalitis")
         'viral encephalitis'
+
+    Args:
+        desc: The original ICD-10 code description string.
+
+    Returns:
+        Cleaned string with *unspecified* qualifiers removed.
     """
     return _UNSPECIFIED_RE.sub("", desc).strip()
 

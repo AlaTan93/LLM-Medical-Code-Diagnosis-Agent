@@ -255,6 +255,16 @@ def build_critic_context(
     Renders a structured summary of each model's diagnoses, reasoning, and
     ICD-10 code matches, plus any previous critic rounds so the critic can
     iterate rather than repeat itself.
+
+    Args:
+        text: Original clinical text.
+        a: :class:`ModelOutput` from model A.
+        b: :class:`ModelOutput` from model B.
+        previous_rounds: Prior critic round dicts (keys: ``round``,
+            ``reasoning``, ``diagnoses``, ``codes``).
+
+    Returns:
+        Formatted context string for the critic's user message.
     """
     lines: list[str] = [f"Patient: {text}\n"]
 
@@ -298,8 +308,12 @@ def build_critic_context(
 def should_critic(state: DiagnoseState) -> str:
     """Conditional router: trigger the critic if the models disagree.
 
-    Returns ``"critic"`` when the models have a different diagnosis count
-    or a different top-1 ICD-10 code; otherwise returns ``"end"``.
+    Args:
+        state: Current LangGraph state with both models' diagnoses and codes.
+
+    Returns:
+        ``"critic"`` if diagnosis counts differ or top-1 codes differ;
+        ``"end"`` otherwise.
     """
     if not state.get("enable_critic", True):
         return "end"
@@ -334,6 +348,13 @@ def critic_agent(state: DiagnoseState) -> dict:
 
     After the loop, a final ``safe_search`` produces the official ICD-10
     codes for the round (consistent with how Model A/B codes are produced).
+
+    Args:
+        state: Current LangGraph state with both models' outputs and any
+            previous critic rounds.
+
+    Returns:
+        State update dict with ``"critic_rounds"`` containing the new round.
     """
     rounds = state.get("critic_rounds", [])
     round_num = len(rounds)
@@ -454,9 +475,13 @@ def critic_agent(state: DiagnoseState) -> dict:
 def should_continue_critic(state: DiagnoseState) -> str:
     """Conditional router: continue the critic loop or end.
 
-    Returns ``"loop"`` if the critic hasn't signalled done, has non-empty
-    diagnoses, and hasn't exceeded ``_MAX_CRITIC_ROUNDS``; otherwise
-    returns ``"end"``.
+    Args:
+        state: Current LangGraph state with accumulated critic rounds.
+
+    Returns:
+        ``"loop"`` if the critic hasn't signalled done, has non-empty
+        diagnoses, and hasn't exceeded ``_MAX_CRITIC_ROUNDS``;
+        ``"end"`` otherwise.
     """
     rounds = state.get("critic_rounds", [])
     if not rounds:

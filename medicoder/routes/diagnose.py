@@ -58,7 +58,14 @@ MODEL_B = os.environ.get("MODEL_B", "deepseek-r1-medical-cot")
 
 
 def diagnose_a(state: DiagnoseState) -> dict:
-    """Call the first medical model (``medgemma-27b-q4_k_s``) for diagnoses."""
+    """Call the first medical model (``MODEL_A``) for diagnoses.
+
+    Args:
+        state: Current LangGraph state containing the clinical text.
+
+    Returns:
+        State update with ``diagnoses_a``, ``reasoning_a``, ``thinking_a``.
+    """
     try:
         diagnoses, reasoning, thinking = diagnose(state["text"], MODEL_A)
         return {"diagnoses_a": diagnoses, "reasoning_a": reasoning, "thinking_a": thinking}
@@ -67,7 +74,14 @@ def diagnose_a(state: DiagnoseState) -> dict:
 
 
 def diagnose_b(state: DiagnoseState) -> dict:
-    """Call the second medical model (``deepseek-r1-medical-cot``)."""
+    """Call the second medical model (``MODEL_B``) for diagnoses.
+
+    Args:
+        state: Current LangGraph state containing the clinical text.
+
+    Returns:
+        State update with ``diagnoses_b``, ``reasoning_b``, ``thinking_b``.
+    """
     try:
         diagnoses, reasoning, thinking = diagnose(state["text"], MODEL_B)
         return {"diagnoses_b": diagnoses, "reasoning_b": reasoning, "thinking_b": thinking}
@@ -76,7 +90,15 @@ def diagnose_b(state: DiagnoseState) -> dict:
 
 
 def search_both(state: DiagnoseState) -> dict:
-    """Run ICD-10 vector search for each model's diagnoses."""
+    """Run ICD-10 vector search for each model's diagnoses.
+
+    Args:
+        state: LangGraph state with both models' diagnoses populated.
+
+    Returns:
+        State update with ``codes_a`` and ``codes_b`` (list of
+        :class:`~medicoder.schemas.ICD10Match`).
+    """
     k = state.get("k", 3)
     return {
         "codes_a": safe_search(state.get("diagnoses_a", []), k),
@@ -88,7 +110,11 @@ def search_both(state: DiagnoseState) -> dict:
 
 
 def _build_graph():  # type: ignore[no-untyped-def]
-    """Compile the LangGraph state graph for dual diagnosis + critic loop."""
+    """Compile the LangGraph state graph for dual diagnosis + critic loop.
+
+    Returns:
+        Compiled LangGraph ready for ``.invoke()``.
+    """
     g = StateGraph(DiagnoseState)
     g.add_node("diagnose_a", diagnose_a)
     g.add_node("diagnose_b", diagnose_b)

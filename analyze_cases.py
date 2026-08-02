@@ -57,7 +57,11 @@ class CaseAgg:
 
 
 def _load_eval_files() -> list[dict]:
-    """Load all eval_output*.json files from the repo root."""
+    """Load all eval_output*.json files from the repo root.
+
+    Returns:
+        List of parsed eval-file dicts (each with ``details``).
+    """
     files = sorted(glob.glob("eval_output*.json"))
     data = []
     for f in files:
@@ -68,13 +72,21 @@ def _load_eval_files() -> list[dict]:
 
 
 def _load_cases() -> list[dict]:
-    """Load test cases for GT codes and note snippets."""
+    """Load test cases for GT codes and note snippets.
+
+    Returns:
+        List of case dicts from ``data/icd10_cm_cases.json``.
+    """
     with open(CASES_PATH) as f:
         return json.load(f)["cases"]
 
 
 def aggregate() -> list[CaseAgg]:
-    """Aggregate per-case metrics across all eval files."""
+    """Aggregate per-case metrics across all eval files.
+
+    Returns:
+        List of :class:`CaseAgg` instances, one per test case.
+    """
     eval_files = _load_eval_files()
     test_cases = _load_cases()
     aggregated: dict[int, CaseAgg] = {}
@@ -114,13 +126,25 @@ def aggregate() -> list[CaseAgg]:
 
 
 def _truncate(s: str, n: int) -> str:
-    """Collapse whitespace and truncate to *n* chars with ellipsis."""
+    """Collapse whitespace and truncate to *n* chars with ellipsis.
+
+    Args:
+        s: Input string.
+        n: Maximum length before truncation.
+
+    Returns:
+        Whitespace-collapsed string, truncated with ``"..."`` if needed.
+    """
     s = " ".join(s.split())
     return s[:n] + "..." if len(s) > n else s
 
 
 def print_table(cases: list[CaseAgg]) -> None:
-    """Print the analysis table sorted best-to-worst."""
+    """Print the analysis table sorted best-to-worst.
+
+    Args:
+        cases: List of :class:`CaseAgg` instances to display.
+    """
     cases.sort(key=lambda c: (-c.top1_pct, -c.avg_recall))
 
     total_evals = sum(c.num_evals for c in cases)
@@ -158,6 +182,7 @@ def print_table(cases: list[CaseAgg]) -> None:
 
 
 def main() -> None:
+    """CLI entry point -- aggregate metrics and print the case difficulty table."""
     cases = aggregate()
     print_table(cases)
 

@@ -83,7 +83,15 @@ class ModelOutput:
 
 
 def clean_str_list(v: list[str]) -> list[str]:
-    """Strip and filter a list of strings, capping at _MAX_DIAGNOSES."""
+    """Strip and filter a list of strings, capping at _MAX_DIAGNOSES.
+
+    Args:
+        v: Raw list of strings (may contain empties or whitespace-only).
+
+    Returns:
+        Cleaned list of non-empty stripped strings, capped at
+        :data:`_MAX_DIAGNOSES` entries.
+    """
     return [s.strip() for s in v if s.strip()][:_MAX_DIAGNOSES]
 
 
@@ -122,7 +130,11 @@ def _extract_json(raw: str) -> dict | None:
     3. Substring from the first ``{`` to the last ``}`` (catches JSON
        embedded after prose or thinking blocks).
 
-    Returns ``None`` if no valid JSON object is found.
+    Args:
+        raw: Raw text from a model response.
+
+    Returns:
+        Parsed JSON dict, or ``None`` if no valid JSON object is found.
     """
     raw = raw.strip()
 
@@ -160,8 +172,13 @@ def _parse_diagnosis_output(raw: str) -> DiagnosisOutput | None:
     """Extract and validate a ``DiagnosisOutput`` from raw model text.
 
     Tries :func:`_extract_json` then constructs a ``DiagnosisOutput``.
-    Returns the validated instance or ``None`` if parsing or validation
-    fails.
+
+    Args:
+        raw: Raw text returned by the model.
+
+    Returns:
+        Validated ``DiagnosisOutput`` instance, or ``None`` if parsing
+        or validation fails.
     """
     data = _extract_json(raw)
     if data is None:
@@ -210,8 +227,13 @@ def _try_parse_output(raw: str) -> tuple[list[str], str] | None:
     Tries structured JSON parsing (preferred) first, then falls back to
     line-based regex parsing for models that ignore JSON format.
 
-    Returns ``(diagnoses, reasoning)`` on success, or ``None`` if no
-    diagnoses could be extracted.
+    Args:
+        raw: Raw text returned by the model (thinking blocks already
+            separated by :func:`medicoder.proxy.extract_thinking`).
+
+    Returns:
+        ``(diagnoses, reasoning)`` on success, or ``None`` if no
+        diagnoses could be extracted.
     """
     result = _parse_diagnosis_output(raw)
     if isinstance(result, DiagnosisOutput) and result.diagnoses:
@@ -299,6 +321,13 @@ def safe_search(diagnoses: list[str], k: int = 3) -> list[ICD10Match]:
     Filters out empty strings and ``[error]``-prefixed entries (emitted by
     node functions when the model call fails) so that error placeholders
     don't pollute the vector search results.
+
+    Args:
+        diagnoses: Diagnosis descriptions to search for.
+        k: Maximum codes to return per diagnosis (default 3).
+
+    Returns:
+        Matching ICD-10 codes, or ``[]`` on error / no valid input.
     """
     valid = [d for d in diagnoses if d and not d.startswith("[error]")]
     if not valid:

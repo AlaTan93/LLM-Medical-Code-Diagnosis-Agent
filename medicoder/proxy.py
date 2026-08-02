@@ -19,7 +19,12 @@ _THINK_RE = re.compile(r"<think>(.*?)</think>\s*", re.DOTALL)
 
 
 def base_url() -> str:
-    """The LiteLLM proxy base URL (e.g. ``http://litellm:4000/v1``)."""
+    """Return the LiteLLM proxy base URL.
+
+    Returns:
+        The base URL from ``LLM_BASE_URL`` env var (default
+        ``http://litellm:4000/v1``), trailing slash stripped.
+    """
     return os.environ.get("LLM_BASE_URL", "http://litellm:4000/v1").rstrip("/")
 
 
@@ -161,9 +166,15 @@ def extract_thinking(text: str) -> tuple[str, str]:
 
 
 def strip_thinking(text: str) -> str:
-    """Remove ``<think>…</think>`` reasoning blocks from a model response.
+    """Remove ``<think>...</think>`` reasoning blocks from a model response.
 
     Backward-compatible wrapper around :func:`extract_thinking` that
     returns only the visible output.
+
+    Args:
+        text: Raw model output that may contain think blocks.
+
+    Returns:
+        The visible output text with all think blocks removed.
     """
     return extract_thinking(text)[1]

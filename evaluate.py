@@ -42,12 +42,26 @@ def normalize(code: str) -> str:
 
     The database stores codes without periods (e.g. ``E119`` for ``E11.9``).
     Ground truth uses standard notation with periods.
+
+    Args:
+        code: ICD-10-CM code string (e.g. ``"E11.9"``).
+
+    Returns:
+        Normalised code with periods removed (e.g. ``"E119"``).
     """
     return code.replace(".", "")
 
 
 def _cat_recall(gt: set[str], codes: list[str]) -> float:
-    """Fraction of GT codes whose 3-char category appears in *codes*."""
+    """Fraction of GT codes whose 3-char category appears in *codes*.
+
+    Args:
+        gt: Set of normalised ground-truth codes.
+        codes: List of normalised predicted codes.
+
+    Returns:
+        Category-level recall (0.0-1.0).
+    """
     if not gt:
         return 0.0
     pred_cats = {c[:3] for c in codes}
@@ -55,7 +69,15 @@ def _cat_recall(gt: set[str], codes: list[str]) -> float:
 
 
 def _cat_precision(gt: set[str], codes: list[str]) -> float:
-    """Fraction of returned codes whose 3-char category matches a GT code."""
+    """Fraction of returned codes whose 3-char category matches a GT code.
+
+    Args:
+        gt: Set of normalised ground-truth codes.
+        codes: List of normalised predicted codes.
+
+    Returns:
+        Category-level precision (0.0-1.0).
+    """
     if not codes:
         return 0.0
     gt_cats = {c[:3] for c in gt}
@@ -63,7 +85,15 @@ def _cat_precision(gt: set[str], codes: list[str]) -> float:
 
 
 def _f1(recall: float, precision: float) -> float:
-    """Harmonic mean of recall and precision (0 when both are 0)."""
+    """Harmonic mean of recall and precision (0 when both are 0).
+
+    Args:
+        recall: Recall value (0.0-1.0).
+        precision: Precision value (0.0-1.0).
+
+    Returns:
+        F1 score (0.0-1.0).
+    """
     denom = recall + precision
     return 2 * recall * precision / denom if denom else 0.0
 
@@ -100,7 +130,11 @@ def _model_metrics(gt: set[str], codes: list[str], dx_cnt: int,
 
 
 def _empty_metrics() -> dict:
-    """Return a zero-valued metrics dict (used when a model has no codes)."""
+    """Return a zero-valued metrics dict (used when a model has no codes).
+
+    Returns:
+        Dict with all metric keys set to zero/``False``, including ``f1``.
+    """
     return {
         "top1_hit": False,
         "top2_hit": False,
@@ -114,13 +148,28 @@ def _empty_metrics() -> dict:
 
 
 def load_cases(path: str = CASES_PATH) -> list[dict]:
-    """Load test cases from the JSON file."""
+    """Load test cases from the JSON file.
+
+    Args:
+        path: Path to the test-cases JSON file.
+
+    Returns:
+        List of case dicts (each with ``medical_note`` and ``icd10_cm``).
+    """
     with open(path) as f:
         return json.load(f)["cases"]
 
 
 def call_diagnose(text: str, timeout: float = 600) -> dict:
-    """POST a medical note to /diagnose and return the parsed response."""
+    """POST a medical note to /diagnose and return the parsed response.
+
+    Args:
+        text: Clinical note text to diagnose.
+        timeout: Request timeout in seconds (default 600).
+
+    Returns:
+        Parsed JSON response from the ``/diagnose`` endpoint.
+    """
     payload = json.dumps({"text": text}).encode()
     req = urllib.request.Request(
         f"{BASE_URL}/diagnose",
@@ -140,9 +189,14 @@ def _query_token_usage(since_ts: str) -> dict | None:
     model alias.  The password is read from the ``LITELLM_DB_PASSWORD``
     environment variable, falling back to ``.env``.
 
-    Returns ``None`` if psycopg is unavailable, the DB is unreachable, or the
-    password is not found — allowing the evaluator to run without token
-    tracking in environments where the audit DB is not accessible.
+    Args:
+        since_ts: ISO-format timestamp; only calls after this time are counted.
+
+    Returns:
+        Dict mapping model alias to token stats
+        (``{prompt_tokens, completion_tokens, total_tokens, calls}``),
+        plus a ``"_combined"`` key with totals.  Returns ``None`` if psycopg
+        is unavailable, the DB is unreachable, or the password is not found.
     """
     try:
         import psycopg
@@ -238,7 +292,14 @@ def _evaluate_case(case: dict, index: int, total: int) -> dict | None:
     Calls the API, computes metrics for both models (and the critic if
     triggered), prints a summary, and returns a details dict.
 
-    Returns ``None`` if the API call fails (error is printed).
+    Args:
+        case: Case dict with ``medical_note`` and ``icd10_cm`` keys.
+        index: Zero-based case index.
+        total: Total number of cases.
+
+    Returns:
+        Detail dict with metrics, codes, diagnoses, and token usage.
+        ``None`` if the API call fails (error is printed).
     """
     gt_raw = case["icd10_cm"]["codes"]
     gt = {normalize(c) for c in gt_raw}
@@ -353,6 +414,13 @@ def _compute_summary(details: list[dict]) -> dict:
 
     Computes top-N hit rates, average recall/precision/F1 (exact + category),
     diagnosis count metrics (match/over/under), and model agreement rate.
+
+    Args:
+        details: List of per-case detail dicts (from :func:`_evaluate_case`).
+
+    Returns:
+        Dict of aggregated metrics keyed by metric name (e.g.
+        ``"top1_a"``, ``"avg_rec_a"``, ``"f1_c"``).
     """
     total = len(details)
 
@@ -450,7 +518,16 @@ def _print_summary(
     token_usage: dict | None = None,
     wall_time_s: float | None = None,
 ) -> None:
-    """Print a side-by-side summary table to stdout."""
+    """Print a side-by-side summary table to stdout.
+
+    Args:
+        m: Aggregated metrics dict (from :func:`_compute_summary`).
+        token_usage: Optional per-model token usage dict (from
+            :func:`_query_token_usage`).  If provided, a token usage
+            section is appended.
+        wall_time_s: Optional total wall-time in seconds.  If provided,
+            printed at the bottom of the table.
+    """
     t = m["total"]
     name_a = MODEL_A
     name_b = MODEL_B
@@ -543,7 +620,16 @@ def _print_summary(
 
 
 def _build_metrics_json(m: dict) -> dict:
-    """Convert summary metrics into the nested JSON-serialisable structure."""
+    """Convert summary metrics into the nested JSON-serialisable structure.
+
+    Args:
+        m: Aggregated metrics dict (from :func:`_compute_summary`).
+
+    Returns:
+        Nested dict suitable for ``json.dump``, with per-model blocks
+        containing ``top1``/``top2``/``top3`` (hits/total/rate), ``recall``,
+        ``precision``, ``f1``, ``category``, and ``diagnoses`` sub-dicts.
+    """
     t = m["total"]
 
     def _model_block(p: str) -> dict:
@@ -611,7 +697,15 @@ def _save_json(
     wall_time_s: float | None = None,
     token_usage: dict | None = None,
 ) -> None:
-    """Write evaluation results (metrics + per-case details) to a JSON file."""
+    """Write evaluation results (metrics + per-case details) to a JSON file.
+
+    Args:
+        path: Output file path.
+        m: Aggregated metrics dict (from :func:`_compute_summary`).
+        details: List of per-case detail dicts.
+        wall_time_s: Optional total wall-time in seconds.
+        token_usage: Optional per-model token usage dict.
+    """
     output: dict = {
         "cases_evaluated": m["total"],
         "models": {"a": MODEL_A, "b": MODEL_B},
@@ -669,7 +763,11 @@ def evaluate(limit: int | None, save_path: str | None) -> None:
 
 
 def main() -> int:
-    """CLI entry point -- parse args and run the evaluator."""
+    """CLI entry point -- parse args and run the evaluator.
+
+    Returns:
+        Process exit code (0 on success).
+    """
     parser = argparse.ArgumentParser(
         description="Evaluate ICD-10-CM coding accuracy of the /diagnose pipeline."
     )

@@ -51,6 +51,14 @@ def close_pool() -> None:
 
 
 def get_pool() -> ConnectionPool:
-    """The initialized pool. Raises if called before lifespan startup."""
+    """Return the initialized connection pool.
+
+    Returns:
+        The process-wide :class:`~psycopg_pool.ConnectionPool`.
+
+    Raises:
+        AssertionError: If called before :func:`init_pool` (i.e., before
+            the FastAPI lifespan has run).
+    """
     assert _pool is not None, "connection pool not initialized (lifespan didn't run)"
     return _pool
